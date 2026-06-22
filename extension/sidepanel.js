@@ -75,6 +75,10 @@ async function connect() {
         opt.disabled = !avail.has(opt.value);
         if (!opt.disabled) opt.textContent = opt.textContent.replace(/（.*?）/, "").trim();
       }
+      const firstAvailable = [...$("agent-select").options].find((opt) => !opt.disabled);
+      if ($("agent-select").selectedOptions[0]?.disabled && firstAvailable) {
+        $("agent-select").value = firstAvailable.value;
+      }
       refreshChromeStatus();
     } catch (e) {
       logLine(`config 讀取失敗：${e.message}`, "err");
