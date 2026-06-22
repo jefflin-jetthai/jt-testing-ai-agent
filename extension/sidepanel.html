@@ -46,15 +46,15 @@
       <div class="row" style="margin-top: 8px">
         <label for="mode-select">模式</label>
         <select id="mode-select">
-          <option value="remote">另開測試 Chrome（穩定）</option>
-          <option value="attach">接管當前分頁（實驗，免開 Chrome）</option>
+          <option value="attach" selected>接管當前分頁（免開 Chrome）</option>
+          <option value="remote">另開測試 Chrome</option>
         </select>
       </div>
-      <div class="row" id="row-remote" style="margin-top: 8px">
+      <div class="row" id="row-remote" style="margin-top: 8px; display: none">
         <button id="btn-launch-chrome" style="background: #1a7f37">啟動測試用 Chrome</button>
         <span id="chrome-status" class="meta"></span>
       </div>
-      <div class="row" id="row-attach" style="margin-top: 8px; display: none">
+      <div class="row" id="row-attach" style="margin-top: 8px">
         <button id="btn-attach" style="background: #1a7f37">接管當前分頁</button>
         <button id="btn-detach" style="background: #3a3a3a; display: none">解除</button>
         <span id="attach-status" class="meta"></span>
