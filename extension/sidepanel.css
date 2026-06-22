@@ -34,7 +34,9 @@ h1 { font-size: 14px; margin: 0; }
 .dot { width: 10px; height: 10px; border-radius: 50%; }
 .dot.on { background: var(--ok); }      /* 已連線：綠 */
 .dot.off { background: #f85149; }        /* 未連線：紅 */
-#btn-stop-bridge:not(:disabled) { background: #b3261e; }
+#btn-stop-bridge:not(:disabled),
+#btn-cancel:not(:disabled),
+#btn-export-cancel:not(:disabled) { background: #b3261e; }
 .panel { padding: 12px; border-bottom: 1px solid var(--border); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 label { color: var(--muted); min-width: 64px; }

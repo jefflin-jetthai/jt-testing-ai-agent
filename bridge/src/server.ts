@@ -19,7 +19,7 @@ import {
 import type { RunStartPayload, WsEvent, WsRequest, WsResponse } from "./protocol.js";
 import { cancelRun, startRun } from "./runner.js";
 import { availableAgents, listAgents } from "./agents/index.js";
-import { exportToPytest } from "./exporter.js";
+import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
 import { ensureCdpProxy, tabRelay } from "./attach.js";
@@ -108,6 +108,9 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
         const out = await exportToPytest(p, broadcast);
         return { ...base, result: out };
       }
+
+      case "export.cancel":
+        return { ...base, result: { cancelled: cancelExport() } };
 
       case "git.commit": {
         const p = req.payload as { message: string; files: string[]; branch?: string };

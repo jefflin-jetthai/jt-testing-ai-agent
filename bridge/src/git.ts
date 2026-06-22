@@ -33,6 +33,19 @@ export async function changedTestFiles(cwd = AT_REPO_PATH): Promise<string[]> {
     .filter(Boolean);
 }
 
+/** 列出 tests/ 與 specs/ 下「未被 git 追蹤」的新檔（中止匯出時用來清除本次產出）。 */
+export async function listUntrackedTestFiles(cwd = AT_REPO_PATH): Promise<string[]> {
+  const r = await git(
+    ["status", "--porcelain", "--untracked-files=all", "--", "tests/", "specs/"],
+    cwd,
+  );
+  return r.stdout
+    .split("\n")
+    .filter((l) => l.startsWith("??"))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
+}
+
 export async function diff(files: string[], cwd = AT_REPO_PATH): Promise<string> {
   const r = await git(["diff", "--", ...files], cwd);
   return r.stdout;

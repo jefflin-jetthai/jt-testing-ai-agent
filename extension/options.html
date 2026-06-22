@@ -5,39 +5,83 @@
     <title>JT Testing AI Agent — 設定</title>
     <link rel="stylesheet" href="sidepanel.css" />
     <style>
-      body { padding: 20px; max-width: 560px; }
-      .field { margin-bottom: 16px; }
-      .field label { display: block; margin-bottom: 4px; color: var(--fg); }
-      .field input { width: 100%; }
-      .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
-      #status { margin-left: 10px; }
+      body {
+        margin: 0;
+        padding: 32px 16px;
+        display: flex;
+        justify-content: center;
+      }
+      .card {
+        width: 100%;
+        max-width: 560px;
+        background: #262626;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px 28px;
+      }
+      .card h1 { font-size: 18px; margin: 0; }
+      .subtitle { color: var(--muted); font-size: 12px; margin: 4px 0 20px; }
+      .field { margin-bottom: 20px; }
+      .field label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .field input { width: 100%; padding: 8px 10px; }
+      .input-row { display: flex; gap: 8px; }
+      .hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+        margin-top: 4px;
+      }
+      #save { padding: 8px 20px; }
+      #status { font-size: 12px; }
+      .footer {
+        margin-top: 22px;
+        text-align: center;
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
     </style>
   </head>
   <body>
-    <h1>JT Testing AI Agent — 設定</h1>
+    <div class="card">
+      <h1>JT Testing AI Agent</h1>
+      <div class="subtitle">設定 · Settings</div>
 
-    <div class="field">
-      <label for="notion-token">Notion Integration Token</label>
-      <input id="notion-token" type="password" placeholder="secret_xxx 或 ntn_xxx" />
-      <div class="hint">
-        在 notion.so/my-integrations 建立 internal integration，並把測試案例頁面分享給它。
+      <div class="field">
+        <label for="notion-token">Notion Integration Token</label>
+        <input id="notion-token" type="password" placeholder="secret_xxx 或 ntn_xxx" />
+        <div class="hint">
+          在 notion.so/my-integrations 建立 internal integration，並把測試案例頁面分享給它。
+        </div>
       </div>
+
+      <div class="field">
+        <label for="at-repo-path">automatic-testing 專案路徑</label>
+        <div class="input-row">
+          <input id="at-repo-path" type="text" placeholder="例如 /Users/you/gitProject/automatic-testing" />
+          <button id="pick-at-repo" style="background: #3a3a3a; white-space: nowrap">選取…</button>
+        </div>
+        <div class="hint">
+          bridge 會用此路徑跑 pytest / 套用測試規範。儲存後於連線時送給 bridge，
+          需按 side panel「停止 bridge」再「連線」套用。留空則用 bridge 預設。
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="save">儲存</button>
+        <span id="status" class="muted"></span>
+      </div>
+
+      <div class="footer">Powered by Jeff Lin</div>
     </div>
-
-    <div class="field">
-      <label for="at-repo-path">automatic-testing 專案路徑</label>
-      <div style="display: flex; gap: 8px">
-        <input id="at-repo-path" type="text" placeholder="例如 /Users/you/gitProject/automatic-testing" />
-        <button id="pick-at-repo" style="background: #3a3a3a; white-space: nowrap">選取…</button>
-      </div>
-      <div class="hint">
-        bridge 會用此路徑跑 pytest / git / 套用測試規範。儲存後於連線時送給 bridge，
-        需按 side panel「停止 bridge」再「連線」套用。留空則用 bridge 預設。
-      </div>
-    </div>
-
-    <button id="save">儲存</button>
-    <span id="status" class="muted small"></span>
 
     <script type="module" src="options.js"></script>
   </body>

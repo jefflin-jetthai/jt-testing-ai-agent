@@ -18,6 +18,7 @@ export type RequestType =
   | "run.start" // Phase 2：開始接管當前分頁執行（payload 帶 extension 已從 Notion 解析好的 TestCase）
   | "run.cancel"
   | "export.toPytest" // Phase 5
+  | "export.cancel"
   | "git.commit"
   | "git.push";
 
