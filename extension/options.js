@@ -1,4 +1,7 @@
 const $ = (id) => document.getElementById(id);
+
+// 顯示版本（讀 manifest）
+$("version").textContent = `v${chrome.runtime.getManifest().version}`;
 const status = (msg, ok) => {
   $("status").textContent = msg;
   $("status").style.color = ok ? "var(--ok)" : "var(--muted)";
