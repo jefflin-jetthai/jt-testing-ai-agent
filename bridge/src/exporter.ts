@@ -4,23 +4,51 @@
  *
  * 只負責「生成檔案」；commit 由 git.commit 另行觸發（不自動 push）。
  */
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { AT_REPO_PATH, CLAUDE_MODEL, DEFAULT_AGENT } from "./config.js";
 import { getAgent } from "./agents/index.js";
-import { changedTestFiles } from "./git.js";
+import { changedTestFiles, listUntrackedTestFiles } from "./git.js";
 import type { TestCase, WsEvent } from "./protocol.js";
+
+/** AT repo 內的測試產生器 agent 規範檔。 */
+const GENERATOR_AGENT_FILE = ".github/agents/playwright-test-generator.agent.md";
+
+/** 讀取產生器規範（去掉 YAML frontmatter）當作 system prompt；找不到則回退簡短規範。 */
+function loadGeneratorSpec(): string {
+  const p = resolve(AT_REPO_PATH, GENERATOR_AGENT_FILE);
+  if (existsSync(p)) {
+    let body = readFileSync(p, "utf8");
+    // 去除開頭的 --- frontmatter ---
+    body = body.replace(/^---\n[\s\S]*?\n---\n/, "");
+    return (
+      "以下是本專案的 Playwright 測試產生器規範，請嚴格遵循：\n\n" +
+      body +
+      "\n\n（註：若無法使用瀏覽器/MCP 檢視工具，則依測試案例與既有 locators.py 生成，無法確定的選擇器以 TODO 標註。）"
+    );
+  }
+  return FALLBACK_SYSTEM_PROMPT;
+}
+
+const FALLBACK_SYSTEM_PROMPT = [
+  "你是一個資深測試工程師，把測試案例固化成可維護的 pytest 程式碼，嚴格遵守本專案 CLAUDE.md 規範：",
+  "選擇器用 tests/common/locators.py 的 Locators 類別、重用 helpers.py / conftest.py fixtures、",
+  "檔名 test_<功能>.py、放對 tests/<product>/<module>/、Vue SPA 用 networkidle + wait_for(visible)。",
+].join("\n");
 
 type Emit = (ev: WsEvent) => void;
 
-const EXPORT_SYSTEM_PROMPT = [
-  "你是一個資深測試工程師，負責把測試案例固化成可維護的 pytest 程式碼。",
-  "嚴格遵守本專案 CLAUDE.md 的規範：",
-  "- 選擇器一律用 tests/common/locators.py 的 Locators 類別，不硬編碼；缺少的選擇器才新增到對應 Locators。",
-  "- 重用 tests/common/helpers.py 既有 helper 與 conftest.py 的 fixtures（page / login_page / test_config 等）。",
-  "- 檔名 test_<功能>.py、函式 test_<行為>()，放對 tests/<product>/<module>/ 目錄。",
-  "- Vue SPA 等待策略：networkidle + 明確 wait_for(visible)。",
-  "- 適當加上 @pytest.mark（smoke/regression 等）與中文 docstring。",
-  "不要捏造不存在的網站行為；無法確定的選擇器以 TODO 註記，但保持檔案語法正確、可被 pytest 收集。",
-].join("\n");
+let exportCtrl: AbortController | null = null;
+
+/** 中止進行中的匯出（由 UI 觸發）。 */
+export function cancelExport(): boolean {
+  if (exportCtrl) {
+    exportCtrl.abort();
+    exportCtrl = null;
+    return true;
+  }
+  return false;
+}
 
 function buildExportPrompt(cases: TestCase[], product: string): string {
   const lines: string[] = [];
@@ -37,9 +65,9 @@ function buildExportPrompt(cases: TestCase[], product: string): string {
   lines.push(
     [
       "要求：",
-      `1. 依 module 分類，建立或擴充 tests/${product}/<module>/test_*.py。`,
-      "2. 先 Read 相關的 locators.py / helpers.py / conftest.py 了解可用資源再動手。",
-      "3. 完成後執行 `uv run pytest <新檔> --collect-only -q` 確認可被收集（語法正確）。",
+      `1. 依產生器規範與 module 分類，建立或擴充 tests/${product}/<module>/test_*.py。`,
+      "2. 先 Read 規範所指定的規則檔與相關 locators.py / helpers.py / conftest.py 再動手。",
+      "3. **產生完成後不需執行 pytest 或任何驗證**。",
       "4. 最後條列你建立/修改了哪些檔案。",
     ].join("\n"),
   );
@@ -57,13 +85,38 @@ export async function exportToPytest(
 
   emit({ type: "agent.log", payload: { runId: "export", kind: "system", text: `開始生成 pytest（product=${product}, ${payload.cases.length} 案例）…` } });
 
-  const res = await agent.run({
-    prompt: buildExportPrompt(payload.cases, product),
-    systemPrompt: EXPORT_SYSTEM_PROMPT,
-    cwd: AT_REPO_PATH,
-    model: agentName === "claude" ? CLAUDE_MODEL : undefined,
-    onEvent: (e) => emit({ type: "agent.log", payload: { runId: "export", kind: e.kind, text: e.text } }),
-  });
+  // 記錄匯出前既有的未追蹤檔，供中止時清除「本次新產生」的檔案
+  const beforeUntracked = new Set(await listUntrackedTestFiles());
+
+  const ctrl = new AbortController();
+  exportCtrl = ctrl;
+  let res;
+  try {
+    res = await agent.run({
+      prompt: buildExportPrompt(payload.cases, product),
+      systemPrompt: loadGeneratorSpec(),
+      cwd: AT_REPO_PATH,
+      model: agentName === "claude" ? CLAUDE_MODEL : undefined,
+      signal: ctrl.signal,
+      onEvent: (e) => emit({ type: "agent.log", payload: { runId: "export", kind: e.kind, text: e.text } }),
+    });
+  } finally {
+    exportCtrl = null;
+  }
+
+  // 被中止 → 移除本次新產生的未追蹤檔，且不回報任何產出
+  if (ctrl.signal.aborted) {
+    const created = (await listUntrackedTestFiles()).filter((f) => !beforeUntracked.has(f));
+    for (const f of created) {
+      try {
+        rmSync(resolve(AT_REPO_PATH, f), { force: true });
+      } catch {
+        /* noop */
+      }
+    }
+    emit({ type: "agent.log", payload: { runId: "export", kind: "system", text: `已中止匯出，已移除本次新產生 ${created.length} 個檔案` } });
+    throw new Error("已中止匯出（不採用產出）");
+  }
 
   const files = await changedTestFiles();
   emit({ type: "agent.log", payload: { runId: "export", kind: "system", text: `生成完成，異動檔案：${files.length} 個` } });

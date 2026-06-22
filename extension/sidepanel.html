@@ -10,26 +10,36 @@
     <header>
       <h1>JT Testing AI Agent</h1>
       <div class="conn">
-        <span id="dot" class="dot off"></span>
-        <span id="conn-text">未連線</span>
+        <button id="btn-options" title="設定 Notion Token / 專案路徑">⚙ 設定</button>
       </div>
     </header>
+    <div id="first-hint" class="hint-bar">首次使用請先點右上角「⚙ 設定」填入 Notion Token</div>
 
     <section class="panel">
       <div class="row">
         <label for="ws-url">Bridge</label>
         <input id="ws-url" type="text" value="ws://localhost:8787" />
+        <span id="dot" class="dot off" title="連線狀態"></span>
         <button id="btn-connect">連線</button>
+        <button id="btn-stop-bridge" disabled>停止</button>
       </div>
-      <pre id="config-box" class="muted small"></pre>
+      <details class="cfg">
+        <summary class="muted small">bridge 設定資訊（點開查看）</summary>
+        <pre id="config-box" class="muted small"></pre>
+      </details>
     </section>
 
     <section class="panel">
       <div class="row">
         <label for="page-id">Notion 頁面</label>
-        <input id="page-id" type="text" placeholder="留空用 Options 預設頁面 ID" />
+        <input id="page-id" type="text" placeholder="貼上 Notion 頁面網址或 32 碼 ID" />
         <button id="btn-load">讀取案例</button>
-        <button id="btn-options" style="background:#3a3a3a">設定</button>
+        <button id="btn-reset" style="background: #3a3a3a" disabled>重置</button>
+      </div>
+      <div class="row" id="cases-toolbar" style="display: none; margin-top: 8px">
+        <button id="btn-select-all" style="background: #3a3a3a">全選</button>
+        <button id="btn-deselect-all" style="background: #3a3a3a">取消全選</button>
+        <span id="cases-count" class="meta"></span>
       </div>
       <div id="cases" class="cases"></div>
     </section>
@@ -39,38 +49,32 @@
         <label for="agent-select">Agent</label>
         <select id="agent-select">
           <option value="claude">Claude</option>
-          <option value="codex" disabled>Codex（Phase 6）</option>
-          <option value="gemini" disabled>Gemini（Phase 6）</option>
+          <option value="codex" disabled>Codex</option>
+          <option value="antigravity" disabled>Antigravity</option>
         </select>
       </div>
-      <div class="row" style="margin-top: 8px">
+      <div class="row" style="margin-top: 8px; flex-wrap: wrap">
         <label for="mode-select">模式</label>
         <select id="mode-select">
-          <option value="attach" selected>接管當前分頁（免開 Chrome）</option>
+          <option value="attach" selected>接管當前分頁（免重開 Chrome）</option>
           <option value="remote">另開測試 Chrome</option>
         </select>
-      </div>
-      <div class="row" id="row-remote" style="margin-top: 8px; display: none">
-        <button id="btn-launch-chrome" style="background: #1a7f37">啟動測試用 Chrome</button>
-        <span id="chrome-status" class="meta"></span>
-      </div>
-      <div class="row" id="row-attach" style="margin-top: 8px">
         <button id="btn-attach" style="background: #1a7f37">接管當前分頁</button>
         <button id="btn-detach" style="background: #3a3a3a; display: none">解除</button>
         <span id="attach-status" class="meta"></span>
+        <button id="btn-launch-chrome" style="background: #1a7f37; display: none">啟動測試用 Chrome</button>
+        <span id="chrome-status" class="meta"></span>
       </div>
       <div class="row" style="margin-top: 8px">
-        <button id="btn-run" disabled>接管當前分頁執行勾選案例</button>
-        <button id="btn-cancel" style="display: none; background: #b3261e">中止</button>
+        <button id="btn-run" disabled>開始執行勾選測試</button>
+        <button id="btn-cancel" disabled>停止</button>
       </div>
       <div id="results"></div>
       <div id="log" class="log"></div>
     </section>
 
     <section class="panel">
-      <div class="small muted" style="margin-bottom: 8px">
-        匯出 pytest → 本地 commit（不自動 push）
-      </div>
+      <div class="small muted" style="margin-bottom: 8px">匯出 pytest 到本地 automatic-testing 專案</div>
       <div class="row">
         <label for="export-product">Product</label>
         <select id="export-product">
@@ -81,20 +85,9 @@
           <option value="report">report</option>
         </select>
         <button id="btn-export" disabled>匯出勾選案例為 pytest</button>
+        <button id="btn-export-cancel" disabled>停止</button>
       </div>
       <div id="export-files" class="meta" style="margin: 8px 0"></div>
-      <div class="row" style="margin-top: 6px">
-        <label for="commit-msg">Commit</label>
-        <input id="commit-msg" type="text" value="test(ai-agent): add generated pytest cases" />
-      </div>
-      <div class="row" style="margin-top: 6px">
-        <label for="commit-branch">Branch</label>
-        <input id="commit-branch" type="text" placeholder="留空=當前分支（建議填 ai-agent/xxx）" />
-      </div>
-      <div class="row" style="margin-top: 6px">
-        <button id="btn-commit" disabled>建立本地 commit</button>
-        <button id="btn-push" disabled style="background: #3a3a3a">Push</button>
-      </div>
     </section>
 
     <script type="module" src="sidepanel.js"></script>

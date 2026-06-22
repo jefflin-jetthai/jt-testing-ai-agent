@@ -2,12 +2,12 @@
 import type { AgentAdapter } from "./types.js";
 import { ClaudeAdapter } from "./claude.js";
 import { CodexAdapter } from "./codex.js";
-import { GeminiAdapter } from "./gemini.js";
+import { AntigravityAdapter } from "./antigravity.js";
 
 const registry = new Map<string, AgentAdapter>();
 registry.set("claude", new ClaudeAdapter());
 registry.set("codex", new CodexAdapter());
-registry.set("gemini", new GeminiAdapter());
+registry.set("antigravity", new AntigravityAdapter());
 
 /** 回傳目前環境實際可用（CLI 存在）的 agent 名稱。 */
 export async function availableAgents(): Promise<string[]> {

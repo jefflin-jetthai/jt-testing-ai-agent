@@ -10,16 +10,18 @@ import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   ARTIFACTS_DIR,
+  AT_REPO_PATH,
   BRIDGE_PORT,
   describeConfig,
   loadAtEnv,
+  saveBridgeConfig,
 } from "./config.js";
 import type { RunStartPayload, WsEvent, WsRequest, WsResponse } from "./protocol.js";
 import { cancelRun, startRun } from "./runner.js";
 import { availableAgents, listAgents } from "./agents/index.js";
-import { exportToPytest } from "./exporter.js";
+import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
-import { chromeStatus, launchChrome } from "./chrome.js";
+import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
 import { ensureCdpProxy, tabRelay } from "./attach.js";
 import type { TestCase } from "./protocol.js";
 
@@ -53,6 +55,31 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
           },
         };
 
+      case "config.setAtRepo": {
+        const { path } = (req.payload as { path?: string }) ?? {};
+        if (!path) return { id: req.id, ok: false, error: "缺少 path" };
+        const exists = existsSync(path);
+        saveBridgeConfig({ AT_REPO_PATH: path });
+        return {
+          ...base,
+          result: {
+            saved: true,
+            path,
+            exists,
+            needsRestart: path !== AT_REPO_PATH,
+          },
+        };
+      }
+
+      case "config.pickFolder":
+        return { ...base, result: await pickFolder() };
+
+      case "bridge.shutdown":
+        // 先回應，再結束整個程序（連同 npm/tsx 父程序）
+        console.log("[bridge] shutdown requested by UI");
+        setTimeout(() => process.exit(0), 150);
+        return { ...base, result: { stopping: true } };
+
       case "chrome.launch": {
         const { url } = (req.payload as { url?: string }) ?? {};
         return { ...base, result: await launchChrome(url) };
@@ -81,6 +108,9 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
         const out = await exportToPytest(p, broadcast);
         return { ...base, result: out };
       }
+
+      case "export.cancel":
+        return { ...base, result: { cancelled: cancelExport() } };
 
       case "git.commit": {
         const p = req.payload as { message: string; files: string[]; branch?: string };

@@ -51,8 +51,16 @@ export function parseVerdict(finalText) {
     const block = finalText.match(/```verdict([\s\S]*?)```/i)?.[1] ?? finalText;
     const statusM = block.match(/STATUS:\s*(PASS|FAIL)/i);
     const summaryM = block.match(/SUMMARY:\s*(.+)/i);
-    if (!statusM)
-        return { status: "error", summary: summaryM?.[1]?.trim() ?? "無法解析測試結果" };
+    if (!statusM) {
+        // 沒有 verdict：常見是 agent 本身的錯誤（額度/認證等），直接把原文帶出來方便診斷
+        const raw = (finalText || "").trim();
+        if (/session limit|usage limit|rate limit|quota/i.test(raw))
+            return { status: "error", summary: `Agent 額度/限制：${raw.slice(0, 160)}` };
+        return {
+            status: "error",
+            summary: summaryM?.[1]?.trim() || raw.slice(0, 200) || "無法解析測試結果（agent 無輸出）",
+        };
+    }
     return {
         status: statusM[1].toUpperCase() === "PASS" ? "pass" : "fail",
         summary: summaryM?.[1]?.trim() ?? "",

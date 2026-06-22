@@ -4,14 +4,45 @@
  * 憑證（NOTION_API_KEY / ANTHROPIC_API_KEY ...）不另存，
  * 一律從 AT repo 的 .env 載入（見 loadAtEnv）。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 
-/** automatic-testing 本地 clone 的路徑（可用環境變數覆寫）。 */
+/** bridge 本地設定檔（由 UI 寫入，例如 AT_REPO_PATH）。 */
+export const BRIDGE_CONFIG_FILE = resolve(
+  fileURLToPath(import.meta.url),
+  "..",
+  "..",
+  ".jt-bridge.json",
+);
+
+function readBridgeConfig(): Record<string, string> {
+  try {
+    return existsSync(BRIDGE_CONFIG_FILE)
+      ? JSON.parse(readFileSync(BRIDGE_CONFIG_FILE, "utf8"))
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+const FILE_CONFIG = readBridgeConfig();
+
+/** 合併寫入本地設定檔（UI 設定用）。下次啟動 bridge 生效。 */
+export function saveBridgeConfig(patch: Record<string, string>): void {
+  const merged = { ...readBridgeConfig(), ...patch };
+  writeFileSync(BRIDGE_CONFIG_FILE, JSON.stringify(merged, null, 2));
+}
+
+/**
+ * automatic-testing 本地 clone 路徑。
+ * 優先序：環境變數 > UI 設定檔 > 預設。
+ */
 export const AT_REPO_PATH =
-  process.env.AT_REPO_PATH ?? "/Users/jefflin/gitProject/automatic-testing";
+  process.env.AT_REPO_PATH ??
+  FILE_CONFIG.AT_REPO_PATH ??
+  "/Users/jefflin/gitProject/automatic-testing";
 
 /** Bridge WebSocket / HTTP 監聽 port。 */
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 8787);

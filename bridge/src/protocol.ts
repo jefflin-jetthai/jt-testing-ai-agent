@@ -10,11 +10,15 @@
 export type RequestType =
   | "hello"
   | "config.describe"
+  | "config.setAtRepo" // UI 設定 automatic-testing 專案路徑（寫入設定檔，重啟生效）
+  | "config.pickFolder" // 叫出原生資料夾選擇器，回傳絕對路徑
+  | "bridge.shutdown" // 由 UI 觸發，關閉 bridge 程序
   | "chrome.launch" // 一鍵啟動測試用 Chrome（remote-debugging + 載入本 extension）
   | "chrome.status"
   | "run.start" // Phase 2：開始接管當前分頁執行（payload 帶 extension 已從 Notion 解析好的 TestCase）
   | "run.cancel"
   | "export.toPytest" // Phase 5
+  | "export.cancel"
   | "git.commit"
   | "git.push";
 
@@ -28,7 +32,7 @@ export type EventType =
 /** run.start 的 payload：extension 傳已解析的 TestCase + 目標分頁資訊。 */
 export interface RunStartPayload {
   cases: TestCase[];
-  agent?: string; // "claude" | "codex" | "gemini"（預設 claude）
+  agent?: string; // "claude" | "codex" | "antigravity"（預設 claude）
   /** "remote"=另開 remote-debugging Chrome（預設、穩定）；"attach"=接管當前分頁(chrome.debugger，實驗) */
   mode?: "remote" | "attach";
   target?: { url?: string; title?: string; tabId?: number };

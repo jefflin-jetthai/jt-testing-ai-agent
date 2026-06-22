@@ -146,6 +146,13 @@ export async function startRun(
         finalText = err instanceof Error ? err.message : String(err);
       }
 
+      // 被使用者中止 → 不產出 markdown / 結果，直接結束
+      if (ctrl.signal.aborted) {
+        if (recorder) await recorder.stop().catch(() => {});
+        log({ tcId: tc.tcId, kind: "system", text: "已中止，略過此測項報告" });
+        break;
+      }
+
       let gifPath: string | undefined;
       if (recorder) {
         try {
@@ -189,7 +196,7 @@ export async function startRun(
     }
 
     activeRuns.delete(runId);
-    emit({ type: "run.done", payload: { runId } });
+    emit({ type: "run.done", payload: { runId, cancelled: ctrl.signal.aborted } });
   })();
 
   return { runId };

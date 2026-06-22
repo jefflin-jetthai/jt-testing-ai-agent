@@ -20,23 +20,76 @@ function logLine(text, cls = "") {
   box.scrollTop = box.scrollHeight;
 }
 
+let bridgeConnected = false;
+
 function setConnected(on) {
+  bridgeConnected = on;
   $("dot").className = `dot ${on ? "on" : "off"}`;
-  $("conn-text").textContent = on ? "已連線" : "未連線";
+  $("btn-connect").disabled = on; // 已連線 → 連線鈕 disable
+  updateStopBridgeBtn();
+  updateActionButtons();
 }
 
-function call(type, payload) {
+/** 停止 bridge：需已連線；但在「已接管 / Chrome 已連線」進行中時 disable，避免中斷 session。 */
+function updateStopBridgeBtn() {
+  const attachMode = $("mode-select").value === "attach";
+  const sessionActive = attachMode ? attachReady : chromeReady;
+  $("btn-stop-bridge").disabled =
+    !bridgeConnected || sessionActive || running || exporting;
+}
+
+/** 探測 bridge 是否已在跑（HTTP /health）。 */
+async function bridgeHealthy(wsUrl) {
+  const httpUrl = wsUrl.replace(/^ws/, "http").replace(/\/+$/, "") + "/health";
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch(httpUrl, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 透過 Native Messaging host 自動啟動 bridge。 */
+function launchBridgeViaNative() {
+  return new Promise((resolve) => {
+    let port;
+    try {
+      port = chrome.runtime.connectNative("com.jt_testing.bridge_launcher");
+    } catch (e) {
+      return resolve({ ok: false, error: e.message });
+    }
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      try { port.disconnect(); } catch { /* noop */ }
+      resolve(r);
+    };
+    port.onMessage.addListener((msg) => finish(msg || { ok: true }));
+    port.onDisconnect.addListener(() =>
+      finish({ ok: false, error: chrome.runtime.lastError?.message || "native host 未安裝或斷線" }),
+    );
+    setTimeout(() => finish({ ok: false, error: "native host 逾時" }), 25000);
+  });
+}
+
+function call(type, payload, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return reject(new Error("bridge 未連線"));
     const id = `r${++reqId}`;
     pending.set(id, { resolve, reject });
     ws.send(JSON.stringify({ id, type, payload }));
-    setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error(`${type} timeout`));
-      }
-    }, 120000);
+    if (timeoutMs > 0) {
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error(`${type} timeout`));
+        }
+      }, timeoutMs);
+    }
   });
 }
 
@@ -51,11 +104,23 @@ async function connect() {
     }
     ws = null;
   }
-  const { bridgeUrl } = await new Promise((r) =>
-    chrome.storage.sync.get(["bridgeUrl"], r),
-  );
-  const url = bridgeUrl || $("ws-url").value.trim() || "ws://localhost:8787";
+  const url = $("ws-url").value.trim() || "ws://localhost:8787";
   $("ws-url").value = url;
+  // 存起來供 Options 的資料夾選取器沿用同一個 bridge 位址
+  chrome.storage.sync.set({ bridgeUrl: url });
+
+  // bridge 沒在跑 → 透過 native host 自動啟動
+  if (!(await bridgeHealthy(url))) {
+    logLine("bridge 未啟動，嘗試自動啟動…", "tool");
+    const r = await launchBridgeViaNative();
+    if (r.ok) {
+      logLine(r.already ? "bridge 已在執行" : "bridge 已自動啟動", "ok");
+    } else {
+      logLine(`自動啟動失敗：${r.error}`, "err");
+      logLine("→ 請先執行一次 bridge/native-host/install.sh <extension id>，或手動 npm run dev", "err");
+    }
+  }
+
   try {
     ws = new WebSocket(url);
   } catch (e) {
@@ -68,7 +133,21 @@ async function connect() {
     try {
       const cfg = await call("config.describe");
       $("config-box").textContent = JSON.stringify(cfg, null, 2);
-      if (!cfg.atRepoExists) logLine("⚠ AT repo 路徑不存在", "err");
+      // 套用 Options 設定的 automatic-testing 路徑
+      const { atRepoPath } = await new Promise((r) =>
+        chrome.storage.sync.get(["atRepoPath"], r),
+      );
+      if (atRepoPath && atRepoPath !== cfg.atRepoPath) {
+        try {
+          const r = await call("config.setAtRepo", { path: atRepoPath });
+          if (!r.exists) logLine(`⚠ 設定的 AT 路徑不存在：${atRepoPath}`, "err");
+          if (r.needsRestart)
+            logLine("AT 路徑已更新，請按「停止 bridge」再「連線」套用", "tool");
+        } catch (e) {
+          logLine(`設定 AT 路徑失敗：${e.message}`, "err");
+        }
+      }
+      if (!cfg.atRepoExists) logLine("⚠ AT repo 路徑不存在（可於設定指定）", "err");
       // 依實際可用的 agent CLI 啟用下拉選項
       const avail = new Set(cfg.availableAgents || ["claude"]);
       for (const opt of $("agent-select").options) {
@@ -107,6 +186,39 @@ async function connect() {
 }
 
 let currentRunId = null;
+let attachReady = false; // attach 模式：是否已成功接管當前分頁
+let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
+let running = false; // 測試執行中
+let exporting = false; // 匯出 pytest 中
+
+/**
+ * 執行鈕：案例已讀取 + 瀏覽器就緒（attach 已接管 / remote Chrome 已啟動）+ 非執行中。
+ * 匯出鈕：只需 bridge 已連線 + 案例已讀取 + 非執行中（產生程式碼不需瀏覽器）。
+ */
+function updateActionButtons() {
+  const hasCases = testCases.length > 0;
+  const attachMode = $("mode-select").value === "attach";
+  const browserReady = attachMode ? attachReady : chromeReady;
+  $("btn-run").disabled = running || !(hasCases && browserReady);
+  $("btn-cancel").disabled = !running; // 執行中才可停止
+  $("btn-export").disabled = running || exporting || !(hasCases && bridgeConnected);
+  $("btn-export-cancel").disabled = !exporting; // 匯出中才可停止
+}
+
+/** 依模式切換 attach / launch 按鈕＋狀態顯示，並更新動作鈕狀態。 */
+function applyModeUI() {
+  const attachMode = $("mode-select").value === "attach";
+  $("btn-attach").style.display = attachMode ? "inline-block" : "none";
+  $("btn-detach").style.display = attachMode && attachReady ? "inline-block" : "none";
+  $("btn-launch-chrome").style.display = attachMode ? "none" : "inline-block";
+  // 狀態指示：只顯示對應模式那一個（在各自按鈕右側）
+  $("attach-status").style.display = attachMode ? "inline" : "none";
+  $("chrome-status").style.display = attachMode ? "none" : "inline";
+  if (attachMode && !attachReady) $("attach-status").textContent = "🔴 未接管";
+  if (!attachMode) refreshChromeStatus();
+  updateActionButtons();
+  updateStopBridgeBtn();
+}
 
 function handleEvent(msg) {
   const p = msg.payload || {};
@@ -132,10 +244,11 @@ function handleEvent(msg) {
       break;
     }
     case "run.done":
-      logLine("◼ 全部測試完成", "ok");
+      logLine(p.cancelled ? "◼ 已中止測試" : "◼ 全部測試完成", p.cancelled ? "tool" : "ok");
       currentRunId = null;
-      $("btn-run").disabled = false;
-      $("btn-cancel").style.display = "none";
+      running = false;
+      updateActionButtons();
+      updateStopBridgeBtn();
       break;
     case "error":
       logLine(p.error ?? "error", "err");
@@ -200,6 +313,11 @@ async function loadCases() {
     renderCases();
     const metaStr = meta?.version ? ` (version ${meta.version}, ENV ${meta.ENV || "-"})` : "";
     logLine(`讀到 ${testCases.length} 個測試案例${metaStr}`, "ok");
+    // 讀取成功 → 讀取鈕 disable、重置鈕 enable
+    if (testCases.length) {
+      $("btn-load").disabled = true;
+      $("btn-reset").disabled = false;
+    }
   } catch (e) {
     logLine(`讀取失敗：${e.message}`, "err");
     if (/Token/.test(e.message)) logLine("→ 請按「設定」填入 Notion Token", "err");
@@ -223,8 +341,20 @@ function renderCases() {
     box.appendChild(el);
   }
   const hasNone = testCases.length === 0;
-  $("btn-run").disabled = hasNone;
-  $("btn-export").disabled = hasNone;
+  $("cases-toolbar").style.display = hasNone ? "none" : "flex";
+  updateActionButtons();
+  updateCasesCount();
+}
+
+function setAllCases(checked) {
+  document.querySelectorAll(".case input[type=checkbox]").forEach((i) => (i.checked = checked));
+  updateCasesCount();
+}
+
+function updateCasesCount() {
+  const total = document.querySelectorAll(".case input[type=checkbox]").length;
+  const sel = document.querySelectorAll(".case input[type=checkbox]:checked").length;
+  $("cases-count").textContent = total ? `已選 ${sel} / ${total}` : "";
 }
 
 function selectedCases() {
@@ -241,7 +371,28 @@ function escapeHtml(s) {
 }
 
 $("btn-connect").addEventListener("click", connect);
+$("btn-stop-bridge").addEventListener("click", async () => {
+  try {
+    await call("bridge.shutdown");
+  } catch {
+    /* 預期：bridge 結束後連線會斷，可能收不到回應 */
+  }
+  logLine("已要求停止 bridge", "tool");
+  try { ws?.close(); } catch { /* noop */ }
+  setConnected(false);
+});
 $("btn-load").addEventListener("click", loadCases);
+$("btn-reset").addEventListener("click", () => {
+  testCases = [];
+  renderCases(); // 清空清單、隱藏工具列、disable 執行/匯出
+  $("page-id").value = ""; // 清空頁面網址輸入框
+  $("btn-load").disabled = false;
+  $("btn-reset").disabled = true;
+  logLine("已重置案例清單", "tool");
+});
+$("btn-select-all").addEventListener("click", () => setAllCases(true));
+$("btn-deselect-all").addEventListener("click", () => setAllCases(false));
+$("cases").addEventListener("change", updateCasesCount);
 $("btn-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("btn-run").addEventListener("click", async () => {
   const cases = selectedCases();
@@ -249,7 +400,9 @@ $("btn-run").addEventListener("click", async () => {
   const tab = await getActiveTab();
   logLine(`接管當前分頁執行 ${cases.length} 個案例 → ${tab?.url || "(未知分頁)"}`, "tool");
   $("results").innerHTML = "";
-  $("btn-run").disabled = true;
+  running = true;
+  updateActionButtons();
+  updateStopBridgeBtn();
   try {
     const { runId } = await call("run.start", {
       cases,
@@ -258,11 +411,12 @@ $("btn-run").addEventListener("click", async () => {
       target: { url: tab?.url, title: tab?.title, tabId: tab?.id },
     });
     currentRunId = runId;
-    $("btn-cancel").style.display = "inline-block";
     logLine(`run 已啟動（${runId}）`, "ok");
   } catch (e) {
     logLine(`啟動失敗：${e.message}`, "err");
-    $("btn-run").disabled = false;
+    running = false;
+    updateActionButtons();
+    updateStopBridgeBtn();
   }
 });
 
@@ -279,20 +433,20 @@ $("btn-cancel").addEventListener("click", async () => {
 async function refreshChromeStatus() {
   try {
     const s = await call("chrome.status");
+    chromeReady = !!s.running;
     $("chrome-status").textContent = s.running
       ? `🟢 ${s.version || "Chrome"}（${s.pages?.length ?? 0} 分頁）`
       : "🔴 未啟動";
   } catch {
-    $("chrome-status").textContent = "";
+    chromeReady = false;
+    $("chrome-status").textContent = "🔴 未啟動";
   }
+  updateActionButtons();
+  updateStopBridgeBtn();
 }
 
 // 模式切換：顯示對應的輔助列
-$("mode-select").addEventListener("change", () => {
-  const attach = $("mode-select").value === "attach";
-  $("row-remote").style.display = attach ? "none" : "flex";
-  $("row-attach").style.display = attach ? "flex" : "none";
-});
+$("mode-select").addEventListener("change", applyModeUI);
 
 // 從目前 bridge ws url 推導 /cdp-relay 位址
 function relayUrl() {
@@ -306,6 +460,7 @@ $("btn-attach").addEventListener("click", async () => {
   try {
     const r = await chrome.runtime.sendMessage({ cmd: "attachCurrentTab", relayUrl: relayUrl() });
     if (r?.ok) {
+      attachReady = true;
       $("attach-status").textContent = `🟢 已接管：${r.title || r.url || ""}`;
       $("btn-detach").style.display = "inline-block";
       logLine(`已接管當前分頁：${r.url || ""}`, "ok");
@@ -316,13 +471,18 @@ $("btn-attach").addEventListener("click", async () => {
     logLine(`接管失敗：${e.message}`, "err");
   } finally {
     $("btn-attach").disabled = false;
+    updateActionButtons();
+    updateStopBridgeBtn();
   }
 });
 
 $("btn-detach").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ cmd: "detachTab" });
-  $("attach-status").textContent = "";
+  attachReady = false;
+  $("attach-status").textContent = "🔴 未接管";
   $("btn-detach").style.display = "none";
+  updateActionButtons();
+  updateStopBridgeBtn();
   logLine("已解除接管", "tool");
 });
 
@@ -348,64 +508,46 @@ $("btn-launch-chrome").addEventListener("click", async () => {
   }
 });
 
-// ── Phase 5：匯出 pytest → 本地 commit ──────────────────────────────
-let exportedFiles = [];
-let committedBranch = null;
-
+// ── 匯出 pytest 到本地 automatic-testing 專案 ──────────────────────────────
 $("btn-export").addEventListener("click", async () => {
   const cases = selectedCases();
   if (!cases.length) return logLine("請先勾選測試案例", "err");
   const product = $("export-product").value;
   logLine(`匯出 ${cases.length} 案例為 pytest（${product}）… 這會請 agent 在本地 AT repo 生成檔案`, "tool");
-  $("btn-export").disabled = true;
+  exporting = true;
+  updateActionButtons(); // disable 匯出、enable 停止
+  updateStopBridgeBtn();
   try {
-    const r = await call("export.toPytest", { cases, product, agent: $("agent-select").value });
-    exportedFiles = r.files || [];
-    $("export-files").innerHTML = exportedFiles.length
-      ? `異動檔案：<br>` + exportedFiles.map((f) => `• ${escapeHtml(f)}`).join("<br>")
+    // 不設逾時：生成可能很久，中止改用「停止」鈕
+    const r = await call("export.toPytest", { cases, product, agent: $("agent-select").value }, 0);
+    const files = r.files || [];
+    $("export-files").innerHTML = files.length
+      ? `匯出檔案：<br>` + files.map((f) => `• ${escapeHtml(f)}`).join("<br>")
       : "（agent 未回報異動檔案，請檢查 log）";
-    $("btn-commit").disabled = exportedFiles.length === 0;
-    logLine(`匯出完成，異動 ${exportedFiles.length} 個檔案`, "ok");
+    logLine(`匯出完成，異動 ${files.length} 個檔案`, "ok");
   } catch (e) {
     logLine(`匯出失敗：${e.message}`, "err");
   } finally {
-    $("btn-export").disabled = false;
+    exporting = false;
+    updateActionButtons();
+    updateStopBridgeBtn();
   }
 });
 
-$("btn-commit").addEventListener("click", async () => {
-  if (!exportedFiles.length) return;
+$("btn-export-cancel").addEventListener("click", async () => {
   try {
-    const r = await call("git.commit", {
-      message: $("commit-msg").value,
-      files: exportedFiles,
-      branch: $("commit-branch").value.trim() || undefined,
-    });
-    if (r.ok) {
-      committedBranch = r.branch;
-      $("btn-push").disabled = false;
-      logLine(`已建立本地 commit ${r.hash?.slice(0, 8)} @ ${r.branch}（未 push）`, "ok");
-    } else {
-      logLine(`commit 失敗：${r.error}`, "err");
-    }
+    await call("export.cancel");
+    logLine("已要求停止匯出", "tool");
   } catch (e) {
-    logLine(`commit 失敗：${e.message}`, "err");
-  }
-});
-
-$("btn-push").addEventListener("click", async () => {
-  if (!confirm(`確定要 push 到 origin/${committedBranch || "(當前分支)"}？`)) return;
-  try {
-    const r = await call("git.push", { branch: committedBranch || undefined });
-    logLine(r.ok ? `已 push：${r.output}` : `push 失敗：${r.output}`, r.ok ? "ok" : "err");
-  } catch (e) {
-    logLine(`push 失敗：${e.message}`, "err");
+    logLine(`停止匯出失敗：${e.message}`, "err");
   }
 });
 
 // 啟動：先嘗試連 bridge，並帶入預設頁面 ID
 (async () => {
-  const { pageId } = await getNotionSettings();
+  const { token, pageId } = await getNotionSettings();
   if (pageId) $("page-id").value = pageId;
+  if (token) $("first-hint").style.display = "none"; // 已設定過 → 不再提示
+  applyModeUI(); // 依預設模式設定按鈕顯示 + 動作鈕狀態
   connect();
 })();

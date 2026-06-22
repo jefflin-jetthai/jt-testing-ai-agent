@@ -12,6 +12,21 @@
   - **Notion 讀取在 extension 端直接 fetch**（模式參考 `../chrome-traslate-compare-plugin`），token 存 `chrome.storage.sync`，於 Options 頁設定。
 - `bridge/` — 本地 Node + TS 服務：WebSocket hub、CDP proxy、agent 編排、錄影轉 gif、pytest 匯出、git。不經手 Notion。
 
+## Agent 帳號與額度
+
+agent 跑在 **bridge（本機 Node 程序）**，它 spawn 你電腦上的 `claude` / `codex` / `antigravity` **CLI** 當子程序。
+用的是**各 CLI 在本機的登入帳號與額度**，**與瀏覽器登入的 AI（claude.ai / ChatGPT 網頁）無關**：
+
+| Agent | 帳號 / 額度來源 | 憑證位置 |
+|---|---|---|
+| Claude | 終端機 `claude` 登入的帳號（訂閱或 `ANTHROPIC_API_KEY`） | `~/.claude` |
+| Codex | `codex` 登入的 OpenAI 帳號 | `~/.codex` |
+| Antigravity | `antigravity` / `agy` CLI 的登入帳號 | `~/.antigravity` |
+
+- 「執行測試 / 匯出 pytest」消耗的是上表 CLI 帳號的額度（例如 `session limit` 是該帳號的上限）。
+- Notion 讀取/寫回用的是 Options 頁的 Notion Token，與 agent 帳號無關。
+- 在終端機執行 `claude` / `codex` / `antigravity` 即可查看或切換登入；bridge 直接沿用其當下登入。
+
 ## Notion 設定（Phase 1）
 
 1. 到 notion.so/my-integrations 建立 internal integration，取得 token。
@@ -29,11 +44,32 @@ npm install
 npm run dev            # 預設 listen ws/http://localhost:8787
 ```
 
+#### （推薦）讓 bridge 連線時自動啟動，免每次手動 `npm run dev`
+
+安裝一次 Native Messaging host，之後 side panel 按「連線」時若偵測 bridge 沒開，會自動把它拉起來：
+
+```bash
+# 1) 到 chrome://extensions 複製本擴充的 ID
+# 2) 安裝 native host（會寫入 Chrome 的 NativeMessagingHosts 目錄）
+cd bridge/native-host
+./install.sh <EXTENSION_ID>
+# 3) 回 chrome://extensions 重新載入擴充（因新增 nativeMessaging 權限）
+```
+
+之後開 side panel 按「連線」即可——bridge 沒跑會自動啟動（detached，背景常駐）。
+搬移專案或更換 extension id 後，重跑 `install.sh` 即可。
+
+- **連線**：bridge 沒跑會自動啟動（`npm start`）。
+- **停止 bridge**：side panel 連線列的紅色「停止 bridge」鈕，會關閉背景 bridge 程序。
+- 改了 bridge 程式碼後：按「停止 bridge」→「連線」即以新碼重啟（自動啟動用 `npm start`，非 watch）。
+
 設定（環境變數，皆可選）：
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `AT_REPO_PATH` | `/Users/jefflin/gitProject/automatic-testing` | automatic-testing 本地 clone |
+| `AT_REPO_PATH` | `/Users/jefflin/gitProject/automatic-testing` | automatic-testing 本地 clone（也可在 extension Options 頁設定／用「選取…」挑資料夾） |
+
+> Options 頁的「選取…」資料夾選擇器由 bridge 叫出原生對話框，**需 bridge 先在執行中**（先在 side panel 按「連線」啟動）。設定後按「停止 bridge」→「連線」套用。
 | `BRIDGE_PORT` | `8787` | WS / HTTP port |
 | `CDP_PROXY_PORT` | `9333` | 給 chrome-devtools-mcp 的 `--browser-url`（Phase 2） |
 | `DEFAULT_AGENT` | `claude` | 預設 agent runtime |
@@ -57,18 +93,19 @@ npm run dev            # 預設 listen ws/http://localhost:8787
 - [x] Phase 3 — 每測項 `.gif`（Page.screencast + ffmpeg，已驗證產出有效 GIF）
 - [x] Phase 4 — Notion 友善 markdown 結果 + 寫回「AI測試報告結果」+ bridge `/artifacts` 預覽
 - [x] Phase 5 — 匯出 pytest 到 AT clone（agent 依 CLAUDE.md 生成）+ 本地 commit（不 push，已驗證 git 邏輯）
-- [x] Phase 6 — 可插拔 agent：Claude（完整驗證）/ Codex / Gemini（已 wired，UI 依實際安裝啟用）
+- [x] Phase 6 — 可插拔 agent：Claude（完整驗證）/ Codex / Antigravity（已 wired，UI 依實際安裝啟用）
 
 ## 完整工作流程
 
-1. **設定** Notion token + 測試頁面 ID（Options 頁）。
+0. **一次性**：`bridge/native-host/install.sh <extension id>` 裝好自動啟動（見上）。
+1. **設定** Notion token + 測試頁面 ID（Options 頁）。開 side panel 按「連線」→ bridge 沒開會自動啟動。
 2. **讀取案例** → 勾選要跑的 TC。
 3. 以 remote-debugging 啟動 Chrome、載入本 extension、開要測的分頁。
 4. **接管當前分頁執行** → agent 即時驅動、log 串流、每測項產出 `.gif` + markdown，結果卡可預覽 gif / 複製 markdown / 寫回 Notion。
 5. **匯出 pytest**（選 product）→ agent 依 AT `CLAUDE.md` 生成測試檔到本地 clone。
 6. **建立本地 commit**（指定分支）→ 不自動 push；確認後按 **Push**。
 
-> Agent 後端可插拔：Claude 為完整驗證路徑；Codex / Gemini 已接好介面，瀏覽器驅動整合屬實驗性（各自 MCP 設定方式不同）。
+> Agent 後端可插拔：Claude 為完整驗證路徑；Codex / Antigravity 已接好介面，瀏覽器驅動整合屬實驗性（各自 MCP 設定方式不同）。
 
 ## 執行測試（Phase 2）
 
