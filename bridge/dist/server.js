@@ -8,12 +8,12 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer } from "ws";
-import { ARTIFACTS_DIR, BRIDGE_PORT, describeConfig, loadAtEnv, } from "./config.js";
+import { ARTIFACTS_DIR, AT_REPO_PATH, BRIDGE_PORT, describeConfig, loadAtEnv, saveBridgeConfig, } from "./config.js";
 import { cancelRun, startRun } from "./runner.js";
 import { availableAgents, listAgents } from "./agents/index.js";
 import { exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
-import { chromeStatus, launchChrome } from "./chrome.js";
+import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
 import { ensureCdpProxy, tabRelay } from "./attach.js";
 loadAtEnv();
 const clients = new Set();
@@ -41,6 +41,29 @@ async function handleRequest(req) {
                         availableAgents: await availableAgents(),
                     },
                 };
+            case "config.setAtRepo": {
+                const { path } = req.payload ?? {};
+                if (!path)
+                    return { id: req.id, ok: false, error: "缺少 path" };
+                const exists = existsSync(path);
+                saveBridgeConfig({ AT_REPO_PATH: path });
+                return {
+                    ...base,
+                    result: {
+                        saved: true,
+                        path,
+                        exists,
+                        needsRestart: path !== AT_REPO_PATH,
+                    },
+                };
+            }
+            case "config.pickFolder":
+                return { ...base, result: await pickFolder() };
+            case "bridge.shutdown":
+                // 先回應，再結束整個程序（連同 npm/tsx 父程序）
+                console.log("[bridge] shutdown requested by UI");
+                setTimeout(() => process.exit(0), 150);
+                return { ...base, result: { stopping: true } };
             case "chrome.launch": {
                 const { url } = req.payload ?? {};
                 return { ...base, result: await launchChrome(url) };

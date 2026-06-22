@@ -7,15 +7,8 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { augmentedEnv, commandExists } from "./env.js";
 import type { AgentAdapter, AgentResult, AgentRunOptions } from "./types.js";
-
-async function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const p = spawn("which", [cmd]);
-    p.on("close", (code) => resolve(code === 0));
-    p.on("error", () => resolve(false));
-  });
-}
 
 export class GeminiAdapter implements AgentAdapter {
   readonly name = "gemini";
@@ -33,7 +26,7 @@ export class GeminiAdapter implements AgentAdapter {
     args.push("-p", fullPrompt);
 
     return new Promise((resolve) => {
-      const child = spawn("gemini", args, { cwd: opts.cwd, env: process.env });
+      const child = spawn("gemini", args, { cwd: opts.cwd, env: augmentedEnv() });
       let finalText = "";
 
       const rl = createInterface({ input: child.stdout });

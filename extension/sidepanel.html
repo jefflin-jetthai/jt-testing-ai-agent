@@ -10,26 +10,30 @@
     <header>
       <h1>JT Testing AI Agent</h1>
       <div class="conn">
-        <span id="dot" class="dot off"></span>
-        <span id="conn-text">未連線</span>
+        <button id="btn-options" title="設定 Notion Token / 專案路徑">⚙ 設定</button>
       </div>
     </header>
+    <div id="first-hint" class="hint-bar">首次使用請先點右上角「⚙ 設定」填入 Notion Token</div>
 
     <section class="panel">
       <div class="row">
         <label for="ws-url">Bridge</label>
         <input id="ws-url" type="text" value="ws://localhost:8787" />
+        <span id="dot" class="dot off" title="連線狀態"></span>
         <button id="btn-connect">連線</button>
+        <button id="btn-stop-bridge" disabled>停止 bridge</button>
       </div>
-      <pre id="config-box" class="muted small"></pre>
+      <details class="cfg">
+        <summary class="muted small">bridge 設定資訊（點開查看）</summary>
+        <pre id="config-box" class="muted small"></pre>
+      </details>
     </section>
 
     <section class="panel">
       <div class="row">
         <label for="page-id">Notion 頁面</label>
-        <input id="page-id" type="text" placeholder="留空用 Options 預設頁面 ID" />
+        <input id="page-id" type="text" placeholder="貼上 Notion 頁面網址或 32 碼 ID" />
         <button id="btn-load">讀取案例</button>
-        <button id="btn-options" style="background:#3a3a3a">設定</button>
       </div>
       <div id="cases" class="cases"></div>
     </section>

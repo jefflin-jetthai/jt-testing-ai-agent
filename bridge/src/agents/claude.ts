@@ -6,15 +6,8 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { augmentedEnv, commandExists } from "./env.js";
 import type { AgentAdapter, AgentResult, AgentRunOptions } from "./types.js";
-
-async function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const p = spawn("which", [cmd]);
-    p.on("close", (code) => resolve(code === 0));
-    p.on("error", () => resolve(false));
-  });
-}
 
 /** 從 stream-json 的一行事件抽出可讀文字並分類。 */
 function interpret(
@@ -100,7 +93,7 @@ export class ClaudeAdapter implements AgentAdapter {
     return new Promise((resolve) => {
       const child = spawn("claude", args, {
         cwd: opts.cwd,
-        env: process.env,
+        env: augmentedEnv(),
       });
 
       let finalText = "";

@@ -22,7 +22,46 @@ function logLine(text, cls = "") {
 
 function setConnected(on) {
   $("dot").className = `dot ${on ? "on" : "off"}`;
-  $("conn-text").textContent = on ? "已連線" : "未連線";
+  $("btn-connect").disabled = on; // 已連線 → 連線鈕 disable
+  $("btn-stop-bridge").disabled = !on; // 已連線 → 停止鈕 enable
+}
+
+/** 探測 bridge 是否已在跑（HTTP /health）。 */
+async function bridgeHealthy(wsUrl) {
+  const httpUrl = wsUrl.replace(/^ws/, "http").replace(/\/+$/, "") + "/health";
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch(httpUrl, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 透過 Native Messaging host 自動啟動 bridge。 */
+function launchBridgeViaNative() {
+  return new Promise((resolve) => {
+    let port;
+    try {
+      port = chrome.runtime.connectNative("com.jt_testing.bridge_launcher");
+    } catch (e) {
+      return resolve({ ok: false, error: e.message });
+    }
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      try { port.disconnect(); } catch { /* noop */ }
+      resolve(r);
+    };
+    port.onMessage.addListener((msg) => finish(msg || { ok: true }));
+    port.onDisconnect.addListener(() =>
+      finish({ ok: false, error: chrome.runtime.lastError?.message || "native host 未安裝或斷線" }),
+    );
+    setTimeout(() => finish({ ok: false, error: "native host 逾時" }), 25000);
+  });
 }
 
 function call(type, payload) {
@@ -51,11 +90,23 @@ async function connect() {
     }
     ws = null;
   }
-  const { bridgeUrl } = await new Promise((r) =>
-    chrome.storage.sync.get(["bridgeUrl"], r),
-  );
-  const url = bridgeUrl || $("ws-url").value.trim() || "ws://localhost:8787";
+  const url = $("ws-url").value.trim() || "ws://localhost:8787";
   $("ws-url").value = url;
+  // 存起來供 Options 的資料夾選取器沿用同一個 bridge 位址
+  chrome.storage.sync.set({ bridgeUrl: url });
+
+  // bridge 沒在跑 → 透過 native host 自動啟動
+  if (!(await bridgeHealthy(url))) {
+    logLine("bridge 未啟動，嘗試自動啟動…", "tool");
+    const r = await launchBridgeViaNative();
+    if (r.ok) {
+      logLine(r.already ? "bridge 已在執行" : "bridge 已自動啟動", "ok");
+    } else {
+      logLine(`自動啟動失敗：${r.error}`, "err");
+      logLine("→ 請先執行一次 bridge/native-host/install.sh <extension id>，或手動 npm run dev", "err");
+    }
+  }
+
   try {
     ws = new WebSocket(url);
   } catch (e) {
@@ -68,7 +119,21 @@ async function connect() {
     try {
       const cfg = await call("config.describe");
       $("config-box").textContent = JSON.stringify(cfg, null, 2);
-      if (!cfg.atRepoExists) logLine("⚠ AT repo 路徑不存在", "err");
+      // 套用 Options 設定的 automatic-testing 路徑
+      const { atRepoPath } = await new Promise((r) =>
+        chrome.storage.sync.get(["atRepoPath"], r),
+      );
+      if (atRepoPath && atRepoPath !== cfg.atRepoPath) {
+        try {
+          const r = await call("config.setAtRepo", { path: atRepoPath });
+          if (!r.exists) logLine(`⚠ 設定的 AT 路徑不存在：${atRepoPath}`, "err");
+          if (r.needsRestart)
+            logLine("AT 路徑已更新，請按「停止 bridge」再「連線」套用", "tool");
+        } catch (e) {
+          logLine(`設定 AT 路徑失敗：${e.message}`, "err");
+        }
+      }
+      if (!cfg.atRepoExists) logLine("⚠ AT repo 路徑不存在（可於設定指定）", "err");
       // 依實際可用的 agent CLI 啟用下拉選項
       const avail = new Set(cfg.availableAgents || ["claude"]);
       for (const opt of $("agent-select").options) {
@@ -241,6 +306,16 @@ function escapeHtml(s) {
 }
 
 $("btn-connect").addEventListener("click", connect);
+$("btn-stop-bridge").addEventListener("click", async () => {
+  try {
+    await call("bridge.shutdown");
+  } catch {
+    /* 預期：bridge 結束後連線會斷，可能收不到回應 */
+  }
+  logLine("已要求停止 bridge", "tool");
+  try { ws?.close(); } catch { /* noop */ }
+  setConnected(false);
+});
 $("btn-load").addEventListener("click", loadCases);
 $("btn-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("btn-run").addEventListener("click", async () => {
@@ -405,7 +480,8 @@ $("btn-push").addEventListener("click", async () => {
 
 // 啟動：先嘗試連 bridge，並帶入預設頁面 ID
 (async () => {
-  const { pageId } = await getNotionSettings();
+  const { token, pageId } = await getNotionSettings();
   if (pageId) $("page-id").value = pageId;
+  if (token) $("first-hint").style.display = "none"; // 已設定過 → 不再提示
   connect();
 })();

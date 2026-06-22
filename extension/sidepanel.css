@@ -22,10 +22,19 @@ header {
   border-bottom: 1px solid var(--border);
 }
 h1 { font-size: 14px; margin: 0; }
-.conn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
-.dot.on { background: var(--ok); }
-.dot.off { background: var(--off); }
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.conn button { padding: 4px 10px; font-size: 12px; background: #3a3a3a; }
+.hint-bar {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #2a2a1a;
+  color: #e3b341;
+  border-bottom: 1px solid var(--border);
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; }
+.dot.on { background: var(--ok); }      /* 已連線：綠 */
+.dot.off { background: #f85149; }        /* 未連線：紅 */
+#btn-stop-bridge:not(:disabled) { background: #b3261e; }
 .panel { padding: 12px; border-bottom: 1px solid var(--border); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 label { color: var(--muted); min-width: 64px; }
@@ -50,6 +59,9 @@ button:disabled { background: #3a3a3a; color: var(--muted); cursor: not-allowed;
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
+.cfg { margin-top: 8px; }
+.cfg summary { cursor: pointer; }
+.cfg pre { max-height: 200px; overflow: auto; }
 .cases { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow: auto; }
 .case {
   display: flex;

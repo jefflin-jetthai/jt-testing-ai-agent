@@ -3,7 +3,7 @@
   "name": "JT Testing AI Agent",
   "version": "0.1.0",
   "description": "讀 Notion 測試案例 → AI Agent 接管當前分頁執行 → 產出 markdown + gif → 可固化成 pytest commit",
-  "permissions": ["sidePanel", "activeTab", "tabs", "storage", "debugger", "scripting"],
+  "permissions": ["sidePanel", "activeTab", "tabs", "storage", "debugger", "scripting", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

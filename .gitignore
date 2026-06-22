@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+bridge/.env
+bridge/.jt-bridge.json
+__pycache__/
+
+# native host：install.sh 產生、含機器絕對路徑，不進版控
+bridge/native-host/launcher.sh

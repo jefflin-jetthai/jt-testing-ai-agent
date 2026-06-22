@@ -10,6 +10,9 @@
 export type RequestType =
   | "hello"
   | "config.describe"
+  | "config.setAtRepo" // UI 設定 automatic-testing 專案路徑（寫入設定檔，重啟生效）
+  | "config.pickFolder" // 叫出原生資料夾選擇器，回傳絕對路徑
+  | "bridge.shutdown" // 由 UI 觸發，關閉 bridge 程序
   | "chrome.launch" // 一鍵啟動測試用 Chrome（remote-debugging + 載入本 extension）
   | "chrome.status"
   | "run.start" // Phase 2：開始接管當前分頁執行（payload 帶 extension 已從 Notion 解析好的 TestCase）

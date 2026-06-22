@@ -14,6 +14,26 @@ import {
 } from "./config.js";
 import { probeCdp } from "./mcp.js";
 
+/** 叫出 macOS 原生「選擇資料夾」對話框，回傳絕對路徑。 */
+export function pickFolder(
+  prompt = "選擇 automatic-testing 專案資料夾",
+): Promise<{ path?: string; canceled?: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const script = `POSIX path of (choose folder with prompt "${prompt.replace(/"/g, '\\"')}")`;
+    const p = spawn("osascript", ["-e", script]);
+    let out = "";
+    let err = "";
+    p.stdout.on("data", (d) => (out += d.toString()));
+    p.stderr.on("data", (d) => (err += d.toString()));
+    p.on("error", (e) => resolve({ error: e.message }));
+    p.on("close", (code) => {
+      if (code === 0 && out.trim()) resolve({ path: out.trim().replace(/\/+$/, "") });
+      else if (/User canceled|cancel/i.test(err)) resolve({ canceled: true });
+      else resolve({ error: err.trim() || `osascript exit ${code}` });
+    });
+  });
+}
+
 /** 輪詢 CDP 直到可連或逾時。 */
 async function waitForCdp(timeoutMs = 15000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
