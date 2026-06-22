@@ -12,6 +12,21 @@
   - **Notion 讀取在 extension 端直接 fetch**（模式參考 `../chrome-traslate-compare-plugin`），token 存 `chrome.storage.sync`，於 Options 頁設定。
 - `bridge/` — 本地 Node + TS 服務：WebSocket hub、CDP proxy、agent 編排、錄影轉 gif、pytest 匯出、git。不經手 Notion。
 
+## Agent 帳號與額度
+
+agent 跑在 **bridge（本機 Node 程序）**，它 spawn 你電腦上的 `claude` / `codex` / `antigravity` **CLI** 當子程序。
+用的是**各 CLI 在本機的登入帳號與額度**，**與瀏覽器登入的 AI（claude.ai / ChatGPT 網頁）無關**：
+
+| Agent | 帳號 / 額度來源 | 憑證位置 |
+|---|---|---|
+| Claude | 終端機 `claude` 登入的帳號（訂閱或 `ANTHROPIC_API_KEY`） | `~/.claude` |
+| Codex | `codex` 登入的 OpenAI 帳號 | `~/.codex` |
+| Antigravity | `antigravity` / `agy` CLI 的登入帳號 | `~/.antigravity` |
+
+- 「執行測試 / 匯出 pytest」消耗的是上表 CLI 帳號的額度（例如 `session limit` 是該帳號的上限）。
+- Notion 讀取/寫回用的是 Options 頁的 Notion Token，與 agent 帳號無關。
+- 在終端機執行 `claude` / `codex` / `antigravity` 即可查看或切換登入；bridge 直接沿用其當下登入。
+
 ## Notion 設定（Phase 1）
 
 1. 到 notion.so/my-integrations 建立 internal integration，取得 token。
@@ -78,7 +93,7 @@ cd bridge/native-host
 - [x] Phase 3 — 每測項 `.gif`（Page.screencast + ffmpeg，已驗證產出有效 GIF）
 - [x] Phase 4 — Notion 友善 markdown 結果 + 寫回「AI測試報告結果」+ bridge `/artifacts` 預覽
 - [x] Phase 5 — 匯出 pytest 到 AT clone（agent 依 CLAUDE.md 生成）+ 本地 commit（不 push，已驗證 git 邏輯）
-- [x] Phase 6 — 可插拔 agent：Claude（完整驗證）/ Codex / Gemini（已 wired，UI 依實際安裝啟用）
+- [x] Phase 6 — 可插拔 agent：Claude（完整驗證）/ Codex / Antigravity（已 wired，UI 依實際安裝啟用）
 
 ## 完整工作流程
 
@@ -90,7 +105,7 @@ cd bridge/native-host
 5. **匯出 pytest**（選 product）→ agent 依 AT `CLAUDE.md` 生成測試檔到本地 clone。
 6. **建立本地 commit**（指定分支）→ 不自動 push；確認後按 **Push**。
 
-> Agent 後端可插拔：Claude 為完整驗證路徑；Codex / Gemini 已接好介面，瀏覽器驅動整合屬實驗性（各自 MCP 設定方式不同）。
+> Agent 後端可插拔：Claude 為完整驗證路徑；Codex / Antigravity 已接好介面，瀏覽器驅動整合屬實驗性（各自 MCP 設定方式不同）。
 
 ## 執行測試（Phase 2）
 

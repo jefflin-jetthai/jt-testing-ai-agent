@@ -32,7 +32,7 @@ export type EventType =
 /** run.start 的 payload：extension 傳已解析的 TestCase + 目標分頁資訊。 */
 export interface RunStartPayload {
   cases: TestCase[];
-  agent?: string; // "claude" | "codex" | "gemini"（預設 claude）
+  agent?: string; // "claude" | "codex" | "antigravity"（預設 claude）
   /** "remote"=另開 remote-debugging Chrome（預設、穩定）；"attach"=接管當前分頁(chrome.debugger，實驗) */
   mode?: "remote" | "attach";
   target?: { url?: string; title?: string; tabId?: number };

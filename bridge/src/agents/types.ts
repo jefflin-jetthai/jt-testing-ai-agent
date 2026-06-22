@@ -1,4 +1,4 @@
-/** 可插拔 agent runtime 的介面（claude / codex / gemini 共用）。 */
+/** 可插拔 agent runtime 的介面（claude / codex / antigravity 共用）。 */
 
 export interface AgentEvent {
   kind: "system" | "text" | "tool" | "result" | "stderr";

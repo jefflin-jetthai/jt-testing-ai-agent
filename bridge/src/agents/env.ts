@@ -13,6 +13,7 @@ export function defaultPath(env: NodeJS.ProcessEnv = process.env): string {
     home ? join(home, ".local", "bin") : "",
     home ? join(home, "bin") : "",
     home ? join(home, ".npm-global", "bin") : "",
+    home ? join(home, ".antigravity", "antigravity", "bin") : "",
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
