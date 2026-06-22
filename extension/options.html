@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <title>JT Testing AI Agent — 設定</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+    <style>
+      body { padding: 20px; max-width: 560px; }
+      .field { margin-bottom: 16px; }
+      .field label { display: block; margin-bottom: 4px; color: var(--fg); }
+      .field input { width: 100%; }
+      .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+      #status { margin-left: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>JT Testing AI Agent — 設定</h1>
+
+    <div class="field">
+      <label for="notion-token">Notion Integration Token</label>
+      <input id="notion-token" type="password" placeholder="secret_xxx 或 ntn_xxx" />
+      <div class="hint">
+        在 notion.so/my-integrations 建立 internal integration，並把測試案例頁面分享給它。
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="test-page-id">測試案例頁面 ID（預設）</label>
+      <input id="test-page-id" type="text" placeholder="例如 380b399ad8b580d0b87fe2c04fee33d1" />
+      <div class="hint">頁面網址末段的 32 碼 ID。每個 heading（含 TC-xx）會被解析成一個測試案例。</div>
+    </div>
+
+    <div class="field">
+      <label for="bridge-url">Bridge URL</label>
+      <input id="bridge-url" type="text" placeholder="ws://localhost:8787" />
+      <div class="hint">本地 bridge 服務位址（執行 / 匯出 / commit 用）。</div>
+    </div>
+
+    <button id="save">儲存</button>
+    <button id="test" style="background:#3a3a3a">測試讀取</button>
+    <span id="status" class="muted small"></span>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

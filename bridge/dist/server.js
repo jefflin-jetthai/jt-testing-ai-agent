@@ -1,0 +1,198 @@
+/**
+ * Bridge 進入點：HTTP（健康檢查）+ WebSocket hub。
+ *
+ * 目前實作 Phase 0（連線 / hello / config）與 Phase 1（notion.listTestCases）。
+ * Phase 2+ 的 run.start / export 等 handler 先回 "not implemented"，逐步補上。
+ */
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { createServer } from "node:http";
+import { extname, join, normalize } from "node:path";
+import { WebSocketServer } from "ws";
+import { ARTIFACTS_DIR, BRIDGE_PORT, describeConfig, loadAtEnv, } from "./config.js";
+import { cancelRun, startRun } from "./runner.js";
+import { availableAgents, listAgents } from "./agents/index.js";
+import { exportToPytest } from "./exporter.js";
+import { createCommit, diff, push } from "./git.js";
+import { chromeStatus, launchChrome } from "./chrome.js";
+import { ensureCdpProxy, tabRelay } from "./attach.js";
+loadAtEnv();
+const clients = new Set();
+function send(ws, msg) {
+    if (ws.readyState === ws.OPEN)
+        ws.send(JSON.stringify(msg));
+}
+/** 廣播事件給所有連線的 extension（agent log / 進度等用）。 */
+export function broadcast(event) {
+    for (const ws of clients)
+        send(ws, event);
+}
+async function handleRequest(req) {
+    const base = { id: req.id, ok: true };
+    try {
+        switch (req.type) {
+            case "hello":
+                return { ...base, result: { server: "jt-testing-ai-agent-bridge", v: "0.1.0" } };
+            case "config.describe":
+                return {
+                    ...base,
+                    result: {
+                        ...describeConfig(),
+                        agents: listAgents(),
+                        availableAgents: await availableAgents(),
+                    },
+                };
+            case "chrome.launch": {
+                const { url } = req.payload ?? {};
+                return { ...base, result: await launchChrome(url) };
+            }
+            case "chrome.status":
+                return { ...base, result: await chromeStatus() };
+            // 註：Notion 讀取已移至 extension 端直接 fetch（參考 chrome-traslate-compare-plugin），bridge 不再經手。
+            case "run.start": {
+                const payload = req.payload;
+                if (!payload?.cases?.length)
+                    return { id: req.id, ok: false, error: "沒有要執行的測試案例" };
+                const { runId } = await startRun(payload, broadcast);
+                return { ...base, result: { runId } };
+            }
+            case "run.cancel": {
+                const { runId } = req.payload ?? {};
+                return { ...base, result: { cancelled: runId ? cancelRun(runId) : false } };
+            }
+            case "export.toPytest": {
+                const p = req.payload;
+                if (!p?.cases?.length)
+                    return { id: req.id, ok: false, error: "沒有要匯出的測試案例" };
+                const out = await exportToPytest(p, broadcast);
+                return { ...base, result: out };
+            }
+            case "git.commit": {
+                const p = req.payload;
+                if (!p?.files?.length)
+                    return { id: req.id, ok: false, error: "沒有要提交的檔案" };
+                const d = await diff(p.files);
+                const commit = await createCommit({
+                    message: p.message || "test(ai-agent): add generated pytest cases",
+                    files: p.files,
+                    branch: p.branch,
+                });
+                return { ...base, result: { ...commit, diff: d } };
+            }
+            case "git.push": {
+                const { branch } = req.payload ?? {};
+                return { ...base, result: await push(branch) };
+            }
+            default:
+                return { id: req.id, ok: false, error: `unknown type: ${req.type}` };
+        }
+    }
+    catch (err) {
+        return {
+            id: req.id,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+        };
+    }
+}
+const MIME = {
+    ".gif": "image/gif",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".md": "text/markdown; charset=utf-8",
+    ".webm": "video/webm",
+};
+const http = createServer((req, res) => {
+    const url = req.url ?? "/";
+    if (url === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, ...describeConfig() }));
+        return;
+    }
+    // 產出物（gif / markdown）瀏覽：/artifacts/<runId>/<file>
+    if (url.startsWith("/artifacts/")) {
+        const rel = normalize(decodeURIComponent(url.slice("/artifacts/".length)));
+        if (rel.includes("..")) {
+            res.writeHead(403);
+            res.end("forbidden");
+            return;
+        }
+        const file = join(ARTIFACTS_DIR, rel);
+        if (!existsSync(file) || !statSync(file).isFile()) {
+            res.writeHead(404);
+            res.end("not found");
+            return;
+        }
+        res.writeHead(200, {
+            "content-type": MIME[extname(file)] ?? "application/octet-stream",
+            "access-control-allow-origin": "*",
+        });
+        createReadStream(file).pipe(res);
+        return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+});
+// 兩個 WS endpoint：預設 "/" 給 side panel；"/cdp-relay" 給 extension 的 debugger 橋接
+const appWss = new WebSocketServer({ noServer: true });
+const relayWss = new WebSocketServer({ noServer: true });
+// /agent-cdp：自建 browser-mcp 經此送 raw CDP，bridge 轉給 TabRelay → extension chrome.debugger
+const agentCdpWss = new WebSocketServer({ noServer: true });
+http.on("upgrade", (req, socket, head) => {
+    const url = req.url ?? "";
+    if (url === "/cdp-relay") {
+        relayWss.handleUpgrade(req, socket, head, (ws) => relayWss.emit("connection", ws, req));
+    }
+    else if (url === "/agent-cdp") {
+        agentCdpWss.handleUpgrade(req, socket, head, (ws) => agentCdpWss.emit("connection", ws, req));
+    }
+    else {
+        appWss.handleUpgrade(req, socket, head, (ws) => appWss.emit("connection", ws, req));
+    }
+});
+relayWss.on("connection", (ws) => {
+    console.log("[bridge] cdp-relay connected（extension debugger 橋接）");
+    tabRelay.attachSocket(ws);
+    ensureCdpProxy();
+});
+agentCdpWss.on("connection", (ws) => {
+    console.log("[bridge] agent-cdp connected（browser-mcp 橋接）");
+    ws.on("message", async (data) => {
+        let msg;
+        try {
+            msg = JSON.parse(data.toString());
+        }
+        catch {
+            return;
+        }
+        if (!msg.method)
+            return;
+        const r = await tabRelay.sendCommand(msg.method, msg.params ?? {});
+        if (ws.readyState === ws.OPEN)
+            ws.send(JSON.stringify({ id: msg.id, result: r.result, error: r.error }));
+    });
+});
+appWss.on("connection", (ws) => {
+    clients.add(ws);
+    console.log(`[bridge] client connected (${clients.size} total)`);
+    ws.on("message", async (data) => {
+        let req;
+        try {
+            req = JSON.parse(data.toString());
+        }
+        catch {
+            send(ws, { type: "error", payload: { error: "invalid JSON" } });
+            return;
+        }
+        const res = await handleRequest(req);
+        send(ws, res);
+    });
+    ws.on("close", () => {
+        clients.delete(ws);
+        console.log(`[bridge] client disconnected (${clients.size} total)`);
+    });
+});
+http.listen(BRIDGE_PORT, () => {
+    console.log(`[bridge] listening on http://localhost:${BRIDGE_PORT}`);
+    console.table(describeConfig());
+});
+//# sourceMappingURL=server.js.map

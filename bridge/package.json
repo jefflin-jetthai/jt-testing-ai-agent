@@ -1,0 +1,23 @@
+{
+  "name": "jt-testing-ai-agent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local bridge server: WS hub + CDP proxy + agent orchestration for the jt-testing-ai-agent Chrome extension",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
