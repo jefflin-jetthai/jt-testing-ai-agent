@@ -32,9 +32,57 @@ function getBridgeUrl() {
   );
 }
 
+/** 探測 bridge 是否已在跑（HTTP /health）。 */
+async function bridgeHealthy(wsUrl) {
+  const httpUrl = wsUrl.replace(/^ws/, "http").replace(/\/+$/, "") + "/health";
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch(httpUrl, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 透過 Native Messaging host 自動啟動 bridge。 */
+function launchBridgeViaNative() {
+  return new Promise((resolve) => {
+    let port;
+    try {
+      port = chrome.runtime.connectNative("com.jt_testing.bridge_launcher");
+    } catch (e) {
+      return resolve({ ok: false, error: e.message });
+    }
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      try { port.disconnect(); } catch { /* noop */ }
+      resolve(r);
+    };
+    port.onMessage.addListener((msg) => finish(msg || { ok: true }));
+    port.onDisconnect.addListener(() =>
+      finish({ ok: false, error: chrome.runtime.lastError?.message || "native host 未安裝" }),
+    );
+    setTimeout(() => finish({ ok: false, error: "native host 逾時" }), 25000);
+  });
+}
+
+/** 確保 bridge 在跑（沒跑就自動啟動）。 */
+async function ensureBridge(url) {
+  if (await bridgeHealthy(url)) return true;
+  const r = await launchBridgeViaNative();
+  return !!r.ok;
+}
+
 /** 開一條暫時性 WS 到 bridge，送一個 request 後關閉。 */
 async function callBridgeOnce(type, payload) {
   const url = await getBridgeUrl();
+  if (!(await ensureBridge(url))) {
+    throw new Error("bridge 未啟動且無法自動啟動（請先裝 native host，或在 side panel 按連線）");
+  }
   return new Promise((resolve, reject) => {
     let ws;
     try {
@@ -63,16 +111,12 @@ async function callBridgeOnce(type, payload) {
 }
 
 $("pick-at-repo").addEventListener("click", async () => {
-  status("請在彈出的視窗選擇資料夾…");
   try {
     const r = await callBridgeOnce("config.pickFolder");
-    if (r.canceled) return status("已取消");
-    if (r.error) return status(`選取失敗：${r.error}`);
+    if (r.canceled || r.error || !r.path) return;
     $("at-repo-path").value = r.path;
-    chrome.storage.sync.set({ atRepoPath: r.path }, () =>
-      status(`已選並儲存：${r.path}（連線後需停止再連線套用）`, true),
-    );
-  } catch (e) {
-    status(`選取失敗：${e.message}`);
+    chrome.storage.sync.set({ atRepoPath: r.path });
+  } catch {
+    /* 選取流程不顯示儲存鈕旁訊息 */
   }
 });

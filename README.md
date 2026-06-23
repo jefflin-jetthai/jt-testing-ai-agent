@@ -44,20 +44,36 @@ npm install
 npm run dev            # 預設 listen ws/http://localhost:8787
 ```
 
-#### （推薦）讓 bridge 連線時自動啟動，免每次手動 `npm run dev`
+#### bridge 連線時自動啟動，免每次手動 `npm run dev`
 
-安裝一次 Native Messaging host，之後 side panel 按「連線」時若偵測 bridge 沒開，會自動把它拉起來：
+目標：side panel 按「連線」時 bridge 沒開就自動拉起來（背景常駐），平常不用手動 `npm run dev`。
+這需要安裝一次 **Native Messaging host**（Chrome 規定：此 manifest 必須由 extension 外部寫入系統目錄，沙箱不能自己寫）。
+
+**正常情況：完全自動 —— 你只要 `npm install`。**
 
 ```bash
-# 1) 到 chrome://extensions 複製本擴充的 ID
-# 2) 安裝 native host（會寫入 Chrome 的 NativeMessagingHosts 目錄）
-cd bridge/native-host
-./install.sh <EXTENSION_ID>
-# 3) 回 chrome://extensions 重新載入擴充（因新增 nativeMessaging 權限）
+cd bridge && npm install      # postinstall 會自動安裝 native host（依 extension/ 路徑推算 extension ID）
 ```
 
-之後開 side panel 按「連線」即可——bridge 沒跑會自動啟動（detached，背景常駐）。
-搬移專案或更換 extension id 後，重跑 `install.sh` 即可。
+安裝時會印出推算的 extension ID，例如：
+```
+extension id = bclmhhlnfnimllooobmohlnnicholnbd
+✓ 已安裝: .../Google/Chrome/NativeMessagingHosts/com.jt_testing.bridge_launcher.json
+```
+
+**ID 不一致時的處理（少數情況）**
+
+推算的 ID 來自 `extension/` 資料夾的絕對路徑。若你從不同路徑載入擴充、或 Chrome 顯示的 ID 與上面印出的不同，native host 會比對失敗（連線時 log 出現 `native messaging host ... forbidden`）。此時手動指定正確 ID 重裝：
+
+```bash
+# 到 chrome://extensions 複製本擴充卡片上的 ID（32 碼小寫），然後：
+cd bridge && npm run setup-native-host -- <你的 EXTENSION_ID>
+```
+
+**首次安裝後務必做一次**：到 `chrome://extensions` **重新載入擴充**（因為擴充新增了 `nativeMessaging` 權限），再關掉重開 side panel。
+
+之後流程：開 side panel → 按「連線」→ bridge 沒跑會自動啟動。
+搬移專案或更換 extension id 後，重跑 `npm install` 或 `npm run setup-native-host` 即可。
 
 - **連線**：bridge 沒跑會自動啟動（`npm start`）。
 - **停止 bridge**：side panel 連線列的紅色「停止 bridge」鈕，會關閉背景 bridge 程序。
@@ -97,7 +113,7 @@ cd bridge/native-host
 
 ## 完整工作流程
 
-0. **一次性**：`bridge/native-host/install.sh <extension id>` 裝好自動啟動（見上）。
+0. **一次性**：`cd bridge && npm install`（會自動裝好 native host 自動啟動）+ 載入 `extension/` 後重新載入一次擴充。
 1. **設定** Notion token + 測試頁面 ID（Options 頁）。開 side panel 按「連線」→ bridge 沒開會自動啟動。
 2. **讀取案例** → 勾選要跑的 TC。
 3. 以 remote-debugging 啟動 Chrome、載入本 extension、開要測的分頁。
