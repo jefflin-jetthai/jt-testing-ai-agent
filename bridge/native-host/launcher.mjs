@@ -9,8 +9,12 @@
  */
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const BRIDGE_DIR = process.env.JT_BRIDGE_DIR;
+// 自我定位：本檔在 <bridge>/native-host/launcher.mjs → bridge 目錄 = 上一層
+const SELF_DIR = dirname(fileURLToPath(import.meta.url));
+const BRIDGE_DIR = process.env.JT_BRIDGE_DIR || dirname(SELF_DIR);
 const PORT = Number(process.env.BRIDGE_PORT || 8787);
 
 function send(obj) {
