@@ -30,7 +30,9 @@ if [ -d "$ROOT/../extension" ]; then
   find "$STAGE/extension" -name ".DS_Store" -delete 2>/dev/null || true
 fi
 
-# Install.command：偵測本機 node、產生 launcher、寫使用者層級 native host manifest
+# Install.command：偵測本機 node、把 bundle 複製到「非 TCC 保護目錄」、寫 native host manifest
+# （重要：Chrome 啟動 native host 時不能在 ~/Downloads /Desktop /Documents 等 TCC 保護目錄執行，
+#   故複製到 ~/Library/Application Support，避開 TCC，與解壓位置無關。）
 cat > "$STAGE/Install.command" <<EOF
 #!/bin/bash
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
@@ -40,14 +42,18 @@ if [ -z "\$NODE" ]; then
   echo "（可關閉此視窗）"; exit 1
 fi
 NODEDIR="\$(dirname "\$NODE")"
+DEST="\$HOME/Library/Application Support/JT Testing AI Agent"
 
-# launcher：用系統 node 跑 bundle（--native-host 模式）
-cat > "\$DIR/launcher.sh" <<L
+mkdir -p "\$DEST"
+cp "\$DIR/bundle.cjs" "\$DEST/bundle.cjs"
+
+# launcher（裝在非保護目錄）：用系統 node 跑 bundle（--native-host 模式）
+cat > "\$DEST/launcher.sh" <<L
 #!/bin/bash
 export PATH="\$NODEDIR:\\\$PATH"
-exec "\$NODE" "\$DIR/bundle.cjs" --native-host
+exec "\$NODE" "\$DEST/bundle.cjs" --native-host
 L
-chmod +x "\$DIR/launcher.sh"
+chmod +x "\$DEST/launcher.sh"
 
 for d in \\
   "\$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" \\
@@ -59,7 +65,7 @@ for d in \\
 {
   "name": "$HOST_NAME",
   "description": "JT Testing AI Agent bridge launcher",
-  "path": "\$DIR/launcher.sh",
+  "path": "\$DEST/launcher.sh",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$EXT_ID/"]
 }
@@ -67,8 +73,9 @@ J
   echo "✓ \$d/$HOST_NAME.json"
 done
 echo ""
-echo "✅ 安裝完成！請勿移動此資料夾。"
-echo "接著：載入 extension → 開 side panel → 按「連線」即可。"
+echo "✅ 安裝完成（bridge 已複製到 \$DEST）！"
+echo "接著：在 chrome://extensions 載入本資料夾內的 extension（請保留此資料夾供 Chrome 讀取）。"
+echo "然後開 side panel → 按「連線」即可。"
 echo "（可關閉此視窗）"
 EOF
 chmod +x "$STAGE/Install.command"
@@ -81,6 +88,7 @@ for d in \\
   "\$HOME/Library/Application Support/Chromium/NativeMessagingHosts"; do
   rm -f "\$d/$HOST_NAME.json" 2>/dev/null || true
 done
+rm -rf "\$HOME/Library/Application Support/JT Testing AI Agent"
 echo "✅ 已解除安裝。"
 EOF
 chmod +x "$STAGE/Uninstall.command"
@@ -91,7 +99,8 @@ JT Testing AI Agent（macOS / node 版）
 前置：請先安裝 Node.js（https://nodejs.org 或 brew install node）。
 
 換電腦安裝步驟：
-1. 把整個「${APPDIR}」資料夾放固定位置，勿日後移動。
+1. 把整個「${APPDIR}」資料夾放固定位置（給 Chrome 讀 extension 用，勿日後移動）。
+   ※ 放哪都可以（含 Downloads）：Install 會把 bridge 複製到 ~/Library/Application Support。
 2. 雙擊「Install.command」（被 Gatekeeper 擋：右鍵→開啟）。
 3. 載入 extension：chrome://extensions → 開發人員模式 → 載入未封裝項目 → 選本資料夾內的 extension。
 4. 開 side panel → Options 填 Notion Token → 按「連線」，bridge 自動啟動。
