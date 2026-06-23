@@ -24,7 +24,7 @@ import {
 } from "./mcp.js";
 import { isRelayConnected } from "./attach.js";
 import { ATTACH_SYSTEM_PROMPT, SYSTEM_PROMPT, buildRunPrompt, parseVerdict } from "./prompt.js";
-import { ScreencastRecorder, findPageWsUrl } from "./recorder.js";
+import { AttachRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
 import { writeMarkdown } from "./report.js";
 import { BRIDGE_PORT } from "./config.js";
 import type {
@@ -61,7 +61,6 @@ export async function startRun(
   }
 
   const mode = payload.mode ?? "remote";
-  const canRecord = mode === "remote"; // attach 模式暫不錄影
 
   // attach 模式：用自建 jt-browser MCP（Runtime.evaluate）經 chrome.debugger 驅動當前分頁，繞開 puppeteer。
   // remote 模式：用 chrome-devtools-mcp 連 9222。
@@ -95,7 +94,7 @@ export async function startRun(
       kind: "system",
       text:
         mode === "attach"
-          ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。agent=${agentName}，attach 模式暫不錄影`
+          ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。agent=${agentName}`
           : `Chrome 已連線：${probe.version}（${probe.pages?.length ?? 0} 個分頁）。agent=${agentName}`,
     });
 
@@ -107,21 +106,22 @@ export async function startRun(
       const startedAt = Date.now();
       emit({ type: "run.step", payload: { runId, tcId: tc.tcId, phase: "start", title: tc.title } });
 
-      // 開始錄影（每測項一段；失敗不阻擋測試）。attach 模式暫不錄影。
-      let recorder: ScreencastRecorder | null = null;
+      // 開始錄影（每測項一段；失敗不阻擋測試）。attach→經 chrome.debugger；remote→連 9222。
+      const gifPathOut = join(runDir, `${tc.tcId}.gif`);
+      const gifTmp = join(runDir, `.tmp-${tc.tcId}`);
+      let recorder: ScreencastRecorder | AttachRecorder | null = null;
       try {
-        const pageWs = canRecord
-          ? await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL)
-          : null;
-        if (pageWs) {
-          recorder = new ScreencastRecorder(
-            pageWs,
-            join(runDir, `${tc.tcId}.gif`),
-            join(runDir, `.tmp-${tc.tcId}`),
-          );
+        if (mode === "attach") {
+          recorder = new AttachRecorder(gifPathOut, gifTmp);
           await recorder.start();
-        } else if (canRecord) {
-          log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
+        } else {
+          const pageWs = await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL);
+          if (pageWs) {
+            recorder = new ScreencastRecorder(pageWs, gifPathOut, gifTmp);
+            await recorder.start();
+          } else {
+            log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
+          }
         }
       } catch (e) {
         log({ tcId: tc.tcId, kind: "stderr", text: `錄影啟動失敗：${(e as Error).message}` });

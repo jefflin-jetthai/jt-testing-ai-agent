@@ -192,6 +192,7 @@ async function connect() {
 }
 
 let currentRunId = null;
+let lastRunId = null; // 最近一次 run（執行結束後仍保留，供「檢視截圖」用）
 let attachReady = false; // attach 模式：是否已成功接管當前分頁
 let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
 let running = false; // 測試執行中
@@ -207,6 +208,7 @@ function updateActionButtons() {
   const browserReady = attachMode ? attachReady : chromeReady;
   $("btn-run").disabled = running || !(hasCases && browserReady);
   $("btn-cancel").disabled = !running; // 執行中才可停止
+  $("btn-view-shots").disabled = !lastRunId; // 有跑過才可檢視截圖
   $("btn-export").disabled = running || exporting || !(hasCases && bridgeConnected);
   $("btn-export-cancel").disabled = !exporting; // 匯出中才可停止
 }
@@ -417,6 +419,8 @@ $("btn-run").addEventListener("click", async () => {
       target: { url: tab?.url, title: tab?.title, tabId: tab?.id },
     });
     currentRunId = runId;
+    lastRunId = runId;
+    updateActionButtons();
     logLine(`run 已啟動（${runId}）`, "ok");
   } catch (e) {
     logLine(`啟動失敗：${e.message}`, "err");
@@ -424,6 +428,16 @@ $("btn-run").addEventListener("click", async () => {
     updateActionButtons();
     updateStopBridgeBtn();
   }
+});
+
+// 檢視截圖：開新分頁瀏覽該 run 的產出（gif 內嵌預覽 + frame 截圖目錄）
+$("btn-view-shots").addEventListener("click", () => {
+  if (!lastRunId) return;
+  const base = ($("ws-url").value.trim() || "ws://localhost:8787")
+    .replace(/^ws/, "http")
+    .replace(/\/+$/, "");
+  const url = `${base}/artifacts/${lastRunId}/`;
+  chrome.tabs.create({ url });
 });
 
 $("btn-cancel").addEventListener("click", async () => {

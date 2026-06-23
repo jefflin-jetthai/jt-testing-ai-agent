@@ -14,6 +14,33 @@ import {
 import { join } from "node:path";
 import WebSocket from "ws";
 import { CDP_BROWSER_URL } from "./config.js";
+import { tabRelay } from "./attach.js";
+import { augmentedEnv } from "./agents/env.js";
+
+/** 把 frameDir 內的 frame-*.jpg 用 ffmpeg 合成 gif。回傳是否成功。 */
+function framesToGif(frameDir: string, outGifPath: string, fps: number): Promise<boolean> {
+  const input = join(frameDir, "frame-%05d.jpg");
+  const filter = `fps=${fps},scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`;
+  return new Promise((resolve) => {
+    // 用補強 PATH（含 /usr/local/bin、/opt/homebrew/bin）以便 native-host 啟動時也找得到 ffmpeg
+    const ff = spawn(
+      "ffmpeg",
+      ["-y", "-framerate", String(fps), "-i", input, "-vf", filter, "-loop", "0", outGifPath],
+      { env: augmentedEnv() },
+    );
+    let err = "";
+    ff.stderr?.on("data", (d) => (err += d.toString()));
+    ff.on("error", (e) => {
+      console.error(`[recorder] ffmpeg spawn 失敗：${e.message}`);
+      resolve(false);
+    });
+    ff.on("close", (code) => {
+      const ok = code === 0 && existsSync(outGifPath);
+      if (!ok) console.error(`[recorder] ffmpeg 合成失敗 code=${code}: ${err.slice(-300)}`);
+      resolve(ok);
+    });
+  });
+}
 
 /** 從 /json/list 找出目標分頁的 webSocketDebuggerUrl（優先比對 url，否則取第一個 page）。 */
 export async function findPageWsUrl(
@@ -107,23 +134,59 @@ export class ScreencastRecorder {
   }
 
   private assembleGif(fps: number): Promise<boolean> {
-    const input = join(this.frameDir, "frame-%05d.jpg");
-    const filter = `fps=${fps},scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`;
-    return new Promise((resolve) => {
-      const ff = spawn("ffmpeg", [
-        "-y",
-        "-framerate",
-        String(fps),
-        "-i",
-        input,
-        "-vf",
-        filter,
-        "-loop",
-        "0",
-        this.outGifPath,
-      ]);
-      ff.on("error", () => resolve(false));
-      ff.on("close", (code) => resolve(code === 0 && existsSync(this.outGifPath)));
+    return framesToGif(this.frameDir, this.outGifPath, fps);
+  }
+}
+
+/**
+ * attach 模式錄影：透過 extension 的 chrome.debugger（tabRelay）下 Page.startScreencast，
+ * 收 Page.screencastFrame 事件存成 jpg，結束以 ffmpeg 合成 gif。
+ * （browser-mcp 的操作走 tabRelay 的 request/response，事件通道由本錄影器獨佔，互不干擾。）
+ */
+export class AttachRecorder {
+  private frameDir: string;
+  private frameCount = 0;
+  private started = false;
+
+  constructor(
+    private readonly outGifPath: string,
+    private readonly workDir: string,
+  ) {
+    this.frameDir = join(workDir, "frames");
+  }
+
+  async start(): Promise<void> {
+    if (!tabRelay.connected) throw new Error("tabRelay 未連線，無法錄影");
+    if (existsSync(this.frameDir)) rmSync(this.frameDir, { recursive: true, force: true });
+    mkdirSync(this.frameDir, { recursive: true });
+
+    tabRelay.onEvent = (method, params: any) => {
+      if (method !== "Page.screencastFrame") return;
+      const idx = String(++this.frameCount).padStart(5, "0");
+      writeFileSync(join(this.frameDir, `frame-${idx}.jpg`), Buffer.from(params.data, "base64"));
+      // 必須 ack，否則 Chrome 停止推送後續 frame
+      void tabRelay.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId });
+    };
+
+    await tabRelay.sendCommand("Page.enable", {});
+    await tabRelay.sendCommand("Page.startScreencast", {
+      format: "jpeg",
+      quality: 60,
+      maxWidth: 900,
+      maxHeight: 900,
+      everyNthFrame: 1,
     });
+    this.started = true;
+  }
+
+  async stop(fps = 4): Promise<string | null> {
+    if (this.started) {
+      await tabRelay.sendCommand("Page.stopScreencast", {});
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    tabRelay.onEvent = null;
+    if (this.frameCount === 0) return null;
+    const ok = await framesToGif(this.frameDir, this.outGifPath, fps);
+    return ok ? this.outGifPath : null;
   }
 }

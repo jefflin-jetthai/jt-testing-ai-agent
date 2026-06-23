@@ -4,7 +4,7 @@
  * 目前實作 Phase 0（連線 / hello / config）與 Phase 1（notion.listTestCases）。
  * Phase 2+ 的 run.start / export 等 handler 先回 "not implemented"，逐步補上。
  */
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -149,6 +149,36 @@ const MIME: Record<string, string> = {
   ".webm": "video/webm",
 };
 
+/** 把某個產出目錄渲染成可瀏覽的 HTML：gif/jpg/png 內嵌預覽，子目錄與其他檔案則列連結。 */
+function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
+  const base = urlPath.endsWith("/") ? urlPath : urlPath + "/";
+  const entries = readdirSync(dirFsPath, { withFileTypes: true }).sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const isImg = (n: string) => /\.(gif|jpe?g|png)$/i.test(n);
+  const items = entries
+    .map((e) => {
+      const href = base + encodeURIComponent(e.name) + (e.isDirectory() ? "/" : "");
+      if (e.isDirectory()) return `<div class="item"><a href="${href}">📁 ${e.name}/</a></div>`;
+      if (isImg(e.name))
+        return `<figure><img src="${href}" loading="lazy" /><figcaption>${e.name}</figcaption></figure>`;
+      return `<div class="item"><a href="${href}">📄 ${e.name}</a></div>`;
+    })
+    .join("\n");
+  return `<!doctype html><meta charset="utf-8"><title>截圖 / 錄影 — ${urlPath}</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:16px}
+  h1{font-size:15px;color:#9cdcfe;font-weight:600}
+  .grid{display:flex;flex-wrap:wrap;gap:12px}
+  figure{margin:0;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:8px;max-width:320px}
+  figure img{max-width:300px;display:block;border-radius:4px}
+  figcaption{font-size:12px;color:#aaa;margin-top:6px;word-break:break-all}
+  .item{padding:4px 0}a{color:#4fc1ff}
+</style>
+<h1>${urlPath}</h1><div class="grid">${items || "<p>（此目錄沒有檔案）</p>"}</div>`;
+}
+
 const http = createServer((req, res) => {
   const url = req.url ?? "/";
   if (url === "/health") {
@@ -165,9 +195,15 @@ const http = createServer((req, res) => {
       return;
     }
     const file = join(ARTIFACTS_DIR, rel);
-    if (!existsSync(file) || !statSync(file).isFile()) {
+    if (!existsSync(file)) {
       res.writeHead(404);
       res.end("not found");
+      return;
+    }
+    // 目錄 → 產生可瀏覽的截圖/錄影索引頁（gif/jpg/png 內嵌預覽）
+    if (statSync(file).isDirectory()) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderArtifactIndex(file, url));
       return;
     }
     res.writeHead(200, {
