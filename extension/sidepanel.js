@@ -115,10 +115,16 @@ async function connect() {
     const r = await launchBridgeViaNative();
     if (r.ok) {
       logLine(r.already ? "bridge 已在執行" : "bridge 已自動啟動", "ok");
+      $("setup-hint").style.display = "none";
+    } else if (/not found|未安裝|forbidden/i.test(r.error || "")) {
+      // 首次：native host 尚未註冊 → 引導使用者做一次性安裝（之後就自動）
+      logLine("⚠ 首次使用：尚未完成一次性設定", "err");
+      $("setup-hint").style.display = "block";
     } else {
       logLine(`自動啟動失敗：${r.error}`, "err");
-      logLine("→ 請先執行一次 bridge/native-host/install.sh <extension id>，或手動 npm run dev", "err");
     }
+  } else {
+    $("setup-hint").style.display = "none";
   }
 
   try {

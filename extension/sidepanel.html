@@ -23,6 +23,11 @@
         <button id="btn-connect">連線</button>
         <button id="btn-stop-bridge" disabled>停止</button>
       </div>
+      <div id="setup-hint" class="setup-hint" style="display: none">
+        <b>首次使用：請完成一次性設定</b><br />
+        雙擊安裝包資料夾內的「<b>安裝.command</b>」（被 Gatekeeper 擋就右鍵→開啟），
+        完成後再按「<b>連線</b>」即可。之後 bridge 會自動啟動，不需再手動。
+      </div>
       <details class="cfg">
         <summary class="muted small">bridge 設定資訊（點開查看）</summary>
         <pre id="config-box" class="muted small"></pre>

@@ -1,37 +1,51 @@
 #!/bin/bash
-# 產出「解壓→雙擊安裝」的 zip：內含單一執行檔 jt-bridge + 安裝/解除安裝.command。
-# 使用者層級安裝（~/Library），免管理員、免 .pkg、免 node。
+# 產出「node 版」zip：打包成單一 JS（bundle.cjs，免 node_modules），由系統 node 啟動。
+# 避開 Gatekeeper（node 已被 Apple 核可），跨機器最穩。使用者需先裝 Node.js。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."          # → bridge/
 ROOT="$PWD"
 OUT="$ROOT/sea/dist"
-SEA_BIN="$OUT/jt-bridge"
 VERSION="$(node -p "require('./package.json').version")"
 EXT_ID="gbodpgijbhekommdppfcgebacbpmedcj"
 HOST_NAME="com.jt_testing.bridge_launcher"
 APPDIR="JT Testing AI Agent"
 
-[ -f "$SEA_BIN" ] || bash "$ROOT/scripts/build-sea.sh"
+echo "==> esbuild 打包單一 JS（含所有依賴）"
+mkdir -p "$OUT"
+npx --yes esbuild sea/entry.mjs \
+  --bundle --platform=node --format=cjs \
+  --outfile="$OUT/bundle.cjs" \
+  --loader:.ts=ts --resolve-extensions=.ts,.mjs,.js,.json \
+  --define:import.meta.url='"file:///bridge"' \
+  --log-level=warning
 
-STAGE="$OUT/zip/$APPDIR"
-rm -rf "$OUT/zip"; mkdir -p "$STAGE"
-cp "$SEA_BIN" "$STAGE/jt-bridge"; chmod +x "$STAGE/jt-bridge"
+STAGE="$OUT/zipnode/$APPDIR"
+rm -rf "$OUT/zipnode"; mkdir -p "$STAGE"
+cp "$OUT/bundle.cjs" "$STAGE/bundle.cjs"
 
-# 安裝.command：自我定位、寫使用者層級 native host manifest、移除 quarantine
-cat > "$STAGE/安裝.command" <<EOF
+# 帶上 extension（Load unpacked，固定 ID）
+if [ -d "$ROOT/../extension" ]; then
+  cp -R "$ROOT/../extension" "$STAGE/extension"
+  find "$STAGE/extension" -name ".DS_Store" -delete 2>/dev/null || true
+fi
+
+# Install.command：偵測本機 node、產生 launcher、寫使用者層級 native host manifest
+cat > "$STAGE/Install.command" <<EOF
 #!/bin/bash
 DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-BIN="\$DIR/jt-bridge"
+NODE="\$(command -v node || true)"
+if [ -z "\$NODE" ]; then
+  echo "❌ 找不到 Node.js。請先安裝（https://nodejs.org 或 brew install node）後再雙擊本檔。"
+  echo "（可關閉此視窗）"; exit 1
+fi
+NODEDIR="\$(dirname "\$NODE")"
 
-# 移除 quarantine，避免 Gatekeeper 擋（下載來的檔案）
-xattr -dr com.apple.quarantine "\$DIR" 2>/dev/null || true
-chmod +x "\$BIN"
-
-# launcher 包一層：Chrome 啟動 native host → exec binary --native-host
+# launcher：用系統 node 跑 bundle（--native-host 模式）
 cat > "\$DIR/launcher.sh" <<L
 #!/bin/bash
-exec "\$BIN" --native-host
+export PATH="\$NODEDIR:\\\$PATH"
+exec "\$NODE" "\$DIR/bundle.cjs" --native-host
 L
 chmod +x "\$DIR/launcher.sh"
 
@@ -39,8 +53,7 @@ for d in \\
   "\$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" \\
   "\$HOME/Library/Application Support/Google/Chrome Beta/NativeMessagingHosts" \\
   "\$HOME/Library/Application Support/Chromium/NativeMessagingHosts"; do
-  parent="\$(dirname "\$d")"
-  [ -d "\$parent" ] || continue
+  parent="\$(dirname "\$d")"; [ -d "\$parent" ] || continue
   mkdir -p "\$d"
   cat > "\$d/$HOST_NAME.json" <<J
 {
@@ -53,44 +66,43 @@ for d in \\
 J
   echo "✓ \$d/$HOST_NAME.json"
 done
-
 echo ""
-echo "✅ 安裝完成！請勿移動此資料夾（manifest 指向這裡）。"
-echo "接著：載入 Chrome extension → 開 side panel → 按「連線」即可。"
+echo "✅ 安裝完成！請勿移動此資料夾。"
+echo "接著：載入 extension → 開 side panel → 按「連線」即可。"
 echo "（可關閉此視窗）"
 EOF
-chmod +x "$STAGE/安裝.command"
+chmod +x "$STAGE/Install.command"
 
-# 解除安裝.command
-cat > "$STAGE/解除安裝.command" <<EOF
+cat > "$STAGE/Uninstall.command" <<EOF
 #!/bin/bash
 for d in \\
   "\$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" \\
   "\$HOME/Library/Application Support/Google/Chrome Beta/NativeMessagingHosts" \\
   "\$HOME/Library/Application Support/Chromium/NativeMessagingHosts"; do
-  rm -f "\$d/$HOST_NAME.json" && echo "removed \$d/$HOST_NAME.json" 2>/dev/null || true
+  rm -f "\$d/$HOST_NAME.json" 2>/dev/null || true
 done
-echo "✅ 已解除安裝（可刪除此資料夾）。"
+echo "✅ 已解除安裝。"
 EOF
-chmod +x "$STAGE/解除安裝.command"
+chmod +x "$STAGE/Uninstall.command"
 
-# 說明檔
 cat > "$STAGE/README.txt" <<EOF
-JT Testing AI Agent — bridge（macOS）
+JT Testing AI Agent（macOS / node 版）
 
-使用方式：
-1. 把整個「${APPDIR}」資料夾放到固定位置（例如「應用程式」或家目錄），勿日後移動。
-2. 雙擊「安裝.command」（若被 Gatekeeper 擋：右鍵 → 開啟）。
-3. 在 Chrome 載入本 extension → 開 side panel → 按「連線」，bridge 會自動啟動。
+前置：請先安裝 Node.js（https://nodejs.org 或 brew install node）。
 
-需另外自備：claude / codex / agy、ffmpeg、git、uv（pytest）。
-解除安裝：雙擊「解除安裝.command」。
+換電腦安裝步驟：
+1. 把整個「${APPDIR}」資料夾放固定位置，勿日後移動。
+2. 雙擊「Install.command」（被 Gatekeeper 擋：右鍵→開啟）。
+3. 載入 extension：chrome://extensions → 開發人員模式 → 載入未封裝項目 → 選本資料夾內的 extension。
+4. 開 side panel → Options 填 Notion Token → 按「連線」，bridge 自動啟動。
+
+需自備：Node.js、claude / codex / agy、ffmpeg、git、uv（pytest）。
+解除安裝：雙擊「Uninstall.command」。
 EOF
 
-ZIP="$OUT/JT-Testing-AI-Agent-bridge-mac-$VERSION.zip"
+ZIP="$OUT/JT-Testing-AI-Agent-bridge-node-$VERSION.zip"
 rm -f "$ZIP"
-( cd "$OUT/zip" && ditto -c -k --sequesterRsrc --keepParent "$APPDIR" "$ZIP" )
-
+( cd "$OUT/zipnode" && ditto -c -k --sequesterRsrc --keepParent "$APPDIR" "$ZIP" )
 echo ""
 echo "✅ 完成：$ZIP"
-echo "使用者：解壓 → 雙擊「安裝.command」→ Chrome 連線即可（免 node / 免 .pkg / 免管理員）。"
+echo "使用者：先裝 Node → 解壓 → 雙擊 Install.command → Chrome 連線（避開 Gatekeeper）。"

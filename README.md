@@ -10,33 +10,30 @@
 
 - `extension/` — MV3 Chrome 擴充（side panel UI + service worker + options）。免建置純 JS，可直接 Load unpacked。
   - **Notion 讀取在 extension 端直接 fetch**（模式參考 `../chrome-traslate-compare-plugin`），token 存 `chrome.storage.sync`，於 Options 頁設定。
-- `bridge/` — 本地 Node + TS 服務：WebSocket hub、CDP proxy、agent 編排、錄影轉 gif、pytest 匯出、git。不經手 Notion。
+- `bridge/` — 本地 Node + TS 服務：WebSocket hub、agent 編排、瀏覽器橋接（chrome.debugger relay / chrome-devtools-mcp）、錄影轉 gif、pytest 匯出、git。不經手 Notion。
 
-## macOS 散佈（免裝 Node）
+## macOS 散佈（node 版 zip）
 
-bridge 打包成**單一執行檔（Node SEA，內含 node）**，使用者**不需 Node / npm**。3 模式：`server`（預設）/ `--browser-mcp` / `--native-host`。
+把 bridge 打包成**單一 JS（`bundle.cjs`，含所有依賴、免 node_modules）**，由使用者的系統 `node` 啟動。
+這樣可避開 Gatekeeper（`node` 已被 Apple 核可、`.js` 不受檢查），跨機器最穩。
 
-兩種包裝（打包者跑）：
+> 為何用 node 版而非單一執行檔：未公證的單一執行檔（Node SEA）被 **Chrome 啟動 native host 時會被 Gatekeeper 擋**（`Native host has exited`）。免 Node 又要免此問題需 Apple Developer ID 簽章 + notarize。沒有憑證就用 node 版。
 
+**打包者（你）**：
 ```bash
 cd bridge
-npm run build:zip    # 推薦：解壓→雙擊安裝的 zip（使用者層級、免管理員、免 .pkg）
-npm run build:pkg    # 或：.pkg 安裝包（系統層級，需管理員密碼）
+npm run build:zip    # 產出 sea/dist/JT-Testing-AI-Agent-bridge-node-<version>.zip
 ```
+內含：`bundle.cjs` + `extension/`（含固定 ID 的 manifest）+ `Install.command` / `Uninstall.command` + `README.txt`。
 
-### A. zip（推薦，最簡單）— 已端到端驗證
-產出 `sea/dist/JT-Testing-AI-Agent-bridge-mac-<version>.zip`，內含 `jt-bridge` + `安裝.command` + `解除安裝.command`。
+**使用者（換電腦）**：
+1. 先裝 **Node.js**（`brew install node` 或 nodejs.org）
+2. 解壓，資料夾放固定位置（勿日後移動）
+3. 雙擊 **Install.command**（被 Gatekeeper 擋 → 右鍵→開啟）：偵測 node、寫使用者層級 native host manifest（固定 ID）
+4. `chrome://extensions` → 開發人員模式 →「載入未封裝項目」→ 選資料夾內的 **extension**
+5. 開 side panel → Options 填 Notion Token → 按「**連線**」→ bridge 自動啟動
 
-**使用者**：
-1. 解壓，把資料夾放固定位置（勿日後移動）
-2. 雙擊「**安裝.command**」（被 Gatekeeper 擋就右鍵→開啟；腳本會自動移除 quarantine、寫使用者層級 native host manifest）
-3. 載入 Chrome extension（固定 ID `gbodpgijbhekommdppfcgebacbpmedcj`）→ 開 side panel → 按「連線」→ bridge 自動啟動
-
-### B. .pkg（系統層級）
-產出 `sea/dist/JT-Testing-AI-Agent-<version>.pkg`，雙擊安裝（需管理員密碼），postinstall 寫系統層級 manifest。未簽章自用右鍵→開啟；對外散佈需 Apple Developer ID 簽章 + notarize（指令見 `scripts/build-pkg.sh` 結尾）。
-
-> 仍需各自安裝/登入的外部工具：agent CLI（`claude` / `codex` / `agy`）、`ffmpeg`、`git`、`uv`（pytest）。
-> 註：remote 模式用到 `npx chrome-devtools-mcp` 仍需 Node；attach 模式（預設）走打包進 binary 的 jt-browser，免 Node。
+> 那台機器仍需自備外部工具：`Node.js`、agent CLI（`claude` / `codex` / `agy`）、`ffmpeg`、`git`、`uv`（pytest）。
 
 ## Agent 帳號與額度
 
@@ -109,7 +106,6 @@ extension id = bclmhhlnfnimllooobmohlnnicholnbd
 
 > Options 頁的「選取…」資料夾選擇器由 bridge 叫出原生對話框，**需 bridge 先在執行中**（先在 side panel 按「連線」啟動）。設定後按「停止 bridge」→「連線」套用。
 | `BRIDGE_PORT` | `8787` | WS / HTTP port |
-| `CDP_PROXY_PORT` | `9333` | 給 chrome-devtools-mcp 的 `--browser-url`（Phase 2） |
 | `DEFAULT_AGENT` | `claude` | 預設 agent runtime |
 
 金鑰（`NOTION_API_KEY` / `ANTHROPIC_API_KEY` 等）自 AT repo 的 `.env` 載入，不另存。
@@ -157,19 +153,18 @@ extension id = bclmhhlnfnimllooobmohlnnicholnbd
 
 > Chrome 路徑 / profile 可用環境變數 `CHROME_BINARY`、`CHROME_USER_DATA_DIR` 覆寫。
 
-### 接管當前分頁（attach 模式，實驗性）
+### 接管當前分頁（attach 模式，預設）
 
 side panel 模式選「接管當前分頁」→ 按「接管當前分頁」：extension 用 `chrome.debugger`
-attach 你日常 Chrome 的當前分頁，CDP 經 `/cdp-relay` 轉發到 bridge 的 CDP proxy(9333)，
-讓 chrome-devtools-mcp 驅動該分頁，**免另開 Chrome**。
+attach 你日常 Chrome 的當前分頁，CDP 經 `/cdp-relay` 轉發到 bridge（`TabRelay`），
+**免另開 Chrome**。
 
-實作組件：`extension/background.js`（debugger relay）、`bridge/src/cdp-proxy.ts`（對 puppeteer
-模擬單一分頁的瀏覽器端點）、`bridge/src/attach.ts`。
+agent 端用自建的 **jt-browser MCP**（`bridge/browser-mcp.mjs`，工具 snapshot / navigate /
+click / fill / wait_for / evaluate，全部以 `Runtime.evaluate` 實作），經 bridge `/agent-cdp` →
+`TabRelay` → `chrome.debugger` 驅動分頁——**繞開 puppeteer**（早期用 puppeteer/chrome-devtools-mcp
+模擬瀏覽器端點的做法因 `take_snapshot`/`bringToFront` 經 chrome.debugger 會卡死而棄用）。
 
-**已驗證**：CDP proxy 握手、`list_pages` 取得當前分頁、session 指令轉發（含
-`Runtime.enable`/`executionContextCreated` 事件 + `Runtime.evaluate`）在隔離測試全數通過。
-**已知限制**：live chrome-devtools-mcp 的 `evaluate_script`/`take_snapshot` 偶發 timeout
-（puppeteer 內部 auto-attach 與本 proxy 合成 Target 事件的時序競態），仍需再調校。
-attach 模式目前暫不錄影。**正式使用請優先用 remote-debugging 模式。**
+實作組件：`extension/background.js`（debugger relay）、`bridge/src/cdp-proxy.ts`（`TabRelay`）、
+`bridge/src/attach.ts`、`bridge/browser-mcp.mjs`。attach 模式目前暫不錄影（gif）。
 
-> 註：原規劃的 `chrome.debugger` attach + CDP relay 仍保留為未來選項；remote-debugging 機制已能讓 agent 驅動「使用者實際的當前分頁」（不另開分頁）。
+> remote 模式（另開測試 Chrome + chrome-devtools-mcp）仍保留為替代；可在 side panel 模式下拉切換。

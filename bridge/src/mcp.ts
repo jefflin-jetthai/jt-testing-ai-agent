@@ -26,11 +26,17 @@ export function writeBrowserMcpConfig(): string {
   const dir = mkdtempSync(join(tmpdir(), "jt-ai-bmcp-"));
   const path = join(dir, "mcp.json");
   const env = { JT_BRIDGE_CDP_URL: `ws://localhost:${BRIDGE_PORT}/agent-cdp` };
-  // 打包成單一執行檔（SEA）時：用自身 binary --browser-mcp，免依賴 node。
-  // 開發時：用 node 跑 browser-mcp.mjs。
-  const server = process.env.JT_BRIDGE_BIN
-    ? { command: process.env.JT_BRIDGE_BIN, args: ["--browser-mcp"], env }
-    : { command: "node", args: [BROWSER_MCP_PATH], env };
+  // node 版（用系統 node 跑 bundle）：node <bundle> --browser-mcp
+  // SEA 版（單一執行檔）：自身 binary --browser-mcp，免依賴 node
+  // 開發：node browser-mcp.mjs
+  let server: { command: string; args: string[]; env: typeof env };
+  if (process.env.JT_BRIDGE_SCRIPT) {
+    server = { command: process.execPath, args: [process.env.JT_BRIDGE_SCRIPT, "--browser-mcp"], env };
+  } else if (process.env.JT_BRIDGE_BIN) {
+    server = { command: process.env.JT_BRIDGE_BIN, args: ["--browser-mcp"], env };
+  } else {
+    server = { command: "node", args: [BROWSER_MCP_PATH], env };
+  }
   const config = { mcpServers: { "jt-browser": server } };
   writeFileSync(path, JSON.stringify(config, null, 2));
   return path;

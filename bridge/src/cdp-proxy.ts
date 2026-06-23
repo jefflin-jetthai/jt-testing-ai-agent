@@ -1,34 +1,11 @@
 /**
- * CDP Proxy（實驗性）——讓 chrome-devtools-mcp(puppeteer) 能驅動
- * 由 extension `chrome.debugger` attach 的「使用者當前分頁」，免另開 Chrome。
+ * TabRelay —— 與 extension 端 `chrome.debugger` 的橋接通道。
  *
- * 原理：puppeteer.connect({browserURL}) 期待一個「瀏覽器層級」CDP 端點，
- * 但 chrome.debugger 只給「分頁層級」CDP。本 proxy 對 puppeteer 模擬一個
- * 只含單一 page target 的瀏覽器：
- *   - 處理 browser 層級指令（Target 域 / Browser 域），合成 targetCreated/attachedToTarget
- *   - 帶 sessionId 的 session 指令 → 轉發給 extension → chrome.debugger.sendCommand
- *   - chrome.debugger 事件 → 包上 sessionId 回送 puppeteer
- *
- * 因 chrome.debugger 不支援 Target 域，session 層級的 Target.* 在本地回空值。
+ * extension 透過 /cdp-relay 連入，attach 當前分頁；bridge 經此把 CDP 指令
+ * 轉發到 chrome.debugger（attach 模式的 jt-browser MCP 即經 /agent-cdp → 這裡驅動分頁）。
  */
-import { createServer, type Server } from "node:http";
-import { WebSocketServer, type WebSocket } from "ws";
+import type { WebSocket } from "ws";
 
-const TARGET_ID = "JT-TAB-TARGET";
-const SESSION_ID = "JT-TAB-SESSION";
-const BROWSER_WS_PATH = "/devtools/browser/jt";
-
-/**
- * 透過 chrome.debugger 會卡住、但對自動化非必要的指令：本地直接回成功。
- * （Page.bringToFront / Target.activateTarget 把分頁帶到前景，自動化不需要。）
- */
-const LOCAL_OK_METHODS = new Set<string>([
-  "Page.bringToFront",
-  "Target.activateTarget",
-  "Emulation.setFocusEmulationEnabled",
-]);
-
-/** 與 extension 端 chrome.debugger 的橋接通道。 */
 export class TabRelay {
   private socket: WebSocket | null = null;
   private seq = 0;
@@ -36,7 +13,6 @@ export class TabRelay {
   public tabId: number | null = null;
   public url = "";
   public title = "";
-  /** chrome.debugger 事件回呼（由 CdpProxy 設定，用來轉送給 puppeteer）。 */
   public onEvent: ((method: string, params: unknown) => void) | null = null;
   public onDetach: (() => void) | null = null;
 
@@ -97,169 +73,5 @@ export class TabRelay {
         }
       }, 30000);
     });
-  }
-}
-
-export class CdpProxy {
-  private server: Server | null = null;
-
-  constructor(
-    private readonly port: number,
-    private readonly relay: TabRelay,
-  ) {}
-
-  get running(): boolean {
-    return !!this.server;
-  }
-
-  start(): void {
-    if (this.server) return;
-    const http = createServer((req, res) => {
-      const url = req.url ?? "/";
-      if (url.startsWith("/json/version")) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            Browser: "Chrome/JT-Proxy",
-            "Protocol-Version": "1.3",
-            "User-Agent": "JT-Testing-AI-Agent CDP Proxy",
-            "V8-Version": "0.0",
-            "WebKit-Version": "0.0",
-            webSocketDebuggerUrl: `ws://127.0.0.1:${this.port}${BROWSER_WS_PATH}`,
-          }),
-        );
-        return;
-      }
-      if (url.startsWith("/json")) {
-        // puppeteer 通常用 /json/version 即可；/json/list 回單一 page
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify([this.targetInfo(true)]));
-        return;
-      }
-      res.writeHead(404);
-      res.end();
-    });
-
-    const wss = new WebSocketServer({ server: http, path: BROWSER_WS_PATH });
-    wss.on("connection", (ws) => this.onPuppeteer(ws));
-    http.listen(this.port, "127.0.0.1");
-    this.server = http;
-  }
-
-  stop(): void {
-    this.server?.close();
-    this.server = null;
-  }
-
-  private targetInfo(attached: boolean) {
-    return {
-      targetId: TARGET_ID,
-      type: "page",
-      title: this.relay.title || "page",
-      url: this.relay.url || "about:blank",
-      attached,
-      canAccessOpener: false,
-      browserContextId: "JT-CONTEXT",
-    };
-  }
-
-  private onPuppeteer(ws: WebSocket): void {
-    const send = (obj: unknown) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
-    };
-
-    // chrome.debugger 事件 → 包 sessionId 後送給 puppeteer
-    this.relay.onEvent = (method, params) => send({ method, params, sessionId: SESSION_ID });
-
-    ws.on("message", async (data) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-      const { id, method, params, sessionId } = msg;
-      if (process.env.CDP_PROXY_DEBUG)
-        console.error(`[proxy] recv id=${id} method=${method} sid=${sessionId ?? "-"}`);
-
-      // ── session 層級：原則上轉發給分頁；Target.* 與部分「會卡住 chrome.debugger」
-      //    的非必要指令在本地回成功（不影響自動化）──
-      if (sessionId) {
-        if (method?.startsWith("Target.") || LOCAL_OK_METHODS.has(method)) {
-          send({ id, sessionId, result: {} });
-          return;
-        }
-        const r = await this.relay.sendCommand(method, params ?? {});
-        if (r.error) send({ id, sessionId, error: this.toError(r.error) });
-        else send({ id, sessionId, result: r.result ?? {} });
-        return;
-      }
-
-      // ── browser 層級：模擬單一 page target ──
-      switch (method) {
-        case "Browser.getVersion":
-          send({
-            id,
-            result: {
-              protocolVersion: "1.3",
-              product: "Chrome/JT-Proxy",
-              revision: "",
-              userAgent: "JT-Testing-AI-Agent",
-              jsVersion: "0.0",
-            },
-          });
-          break;
-        case "Target.getBrowserContexts":
-          send({ id, result: { browserContextIds: [] } });
-          break;
-        case "Target.setDiscoverTargets":
-          send({ id, result: {} });
-          send({ method: "Target.targetCreated", params: { targetInfo: this.targetInfo(false) } });
-          break;
-        case "Target.setAutoAttach":
-          send({ id, result: {} });
-          send({
-            method: "Target.attachedToTarget",
-            params: {
-              sessionId: SESSION_ID,
-              targetInfo: this.targetInfo(true),
-              waitingForDebugger: false,
-            },
-          });
-          break;
-        case "Target.attachToTarget":
-          send({ id, result: { sessionId: SESSION_ID } });
-          send({
-            method: "Target.attachedToTarget",
-            params: {
-              sessionId: SESSION_ID,
-              targetInfo: this.targetInfo(true),
-              waitingForDebugger: false,
-            },
-          });
-          break;
-        case "Target.getTargets":
-          send({ id, result: { targetInfos: [this.targetInfo(true)] } });
-          break;
-        case "Target.getTargetInfo":
-          send({ id, result: { targetInfo: this.targetInfo(true) } });
-          break;
-        default:
-          // 其餘 browser 指令回空 result，避免卡住握手
-          send({ id, result: {} });
-      }
-    });
-
-    ws.on("close", () => {
-      if (this.relay.onEvent) this.relay.onEvent = null;
-    });
-  }
-
-  private toError(error: unknown): { code: number; message: string } {
-    const message =
-      typeof error === "object" && error && "message" in error
-        ? String((error as any).message)
-        : String(error);
-    return { code: -32000, message };
   }
 }

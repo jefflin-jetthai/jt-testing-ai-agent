@@ -31,8 +31,9 @@ const finish = (code = 0) => setTimeout(() => process.exit(code), 120);
 (async () => {
   try {
     if (await isUp()) { send({ ok: true, already: true }); return finish(0); }
-    // 啟動自身 binary（無 arg = bridge server），detached
-    const child = spawn(process.execPath, [], { detached: true, stdio: "ignore", env: process.env });
+    // 啟動 bridge server（detached）：SEA 版 = 執行檔本身；node 版 = node + bundle 路徑
+    const serverArgs = process.env.JT_BRIDGE_SCRIPT ? [process.env.JT_BRIDGE_SCRIPT] : [];
+    const child = spawn(process.execPath, serverArgs, { detached: true, stdio: "ignore", env: process.env });
     child.unref();
     for (let i = 0; i < 40; i++) {
       if (await isUp()) { send({ ok: true, started: true }); return finish(0); }

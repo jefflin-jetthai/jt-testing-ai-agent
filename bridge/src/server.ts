@@ -22,7 +22,7 @@ import { availableAgents, listAgents } from "./agents/index.js";
 import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
-import { ensureCdpProxy, tabRelay } from "./attach.js";
+import { tabRelay } from "./attach.js";
 import type { TestCase } from "./protocol.js";
 
 loadAtEnv();
@@ -202,7 +202,6 @@ http.on("upgrade", (req, socket, head) => {
 relayWss.on("connection", (ws) => {
   console.log("[bridge] cdp-relay connected（extension debugger 橋接）");
   tabRelay.attachSocket(ws);
-  ensureCdpProxy();
 });
 
 agentCdpWss.on("connection", (ws) => {

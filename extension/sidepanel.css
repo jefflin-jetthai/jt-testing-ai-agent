@@ -31,6 +31,16 @@ h1 { font-size: 14px; margin: 0; }
   color: #e3b341;
   border-bottom: 1px solid var(--border);
 }
+.setup-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #2a2a1a;
+  color: #e3b341;
+  border: 1px solid #6b5a1a;
+  border-radius: 4px;
+}
 .dot { width: 10px; height: 10px; border-radius: 50%; }
 .dot.on { background: var(--ok); }      /* 已連線：綠 */
 .dot.off { background: #f85149; }        /* 未連線：紅 */

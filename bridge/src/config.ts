@@ -54,9 +54,6 @@ export const AT_REPO_PATH =
 /** Bridge WebSocket / HTTP 監聽 port。 */
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 8787);
 
-/** CDP proxy 監聽 port（給 chrome-devtools-mcp 的 --browser-url 用）。 */
-export const CDP_PROXY_PORT = Number(process.env.CDP_PROXY_PORT ?? 9333);
-
 /**
  * 目標 Chrome 的 CDP endpoint。Phase 2 主要機制：
  * 使用者以 `--remote-debugging-port=9222` 啟動 Chrome（extension 也載入其中），
@@ -113,7 +110,6 @@ export function describeConfig(): Record<string, unknown> {
     notionKeyConfigured: Boolean(process.env.NOTION_API_KEY),
     anthropicKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
     bridgePort: BRIDGE_PORT,
-    cdpProxyPort: CDP_PROXY_PORT,
     cdpBrowserUrl: CDP_BROWSER_URL,
     defaultAgent: DEFAULT_AGENT,
     artifactsDir: ARTIFACTS_DIR,

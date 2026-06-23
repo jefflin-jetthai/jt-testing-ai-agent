@@ -10,9 +10,18 @@
 // 打包版標記：讓設定/資料寫到使用者資料夾（並被 detached 子程序繼承）
 process.env.JT_PACKAGED = "1";
 
+// node 版（用系統 node 跑 bundle）：記住 bundle 路徑，供子程序（browser-mcp / 啟動 server）沿用。
+// SEA 版：execPath = jt-bridge binary、無 script，這裡不設定。
+if (/(^|\/)node\d*$/.test(process.execPath) && process.argv[1]) {
+  process.env.JT_BRIDGE_SCRIPT = process.argv[1];
+}
+
 const argv = process.argv;
 
-if (argv.includes("--browser-mcp")) {
+if (argv.includes("--version") || argv.includes("-v")) {
+  process.stdout.write("jt-bridge 1.0.0\n");
+  process.exit(0);
+} else if (argv.includes("--browser-mcp")) {
   import("../browser-mcp.mjs");
 } else if (argv.includes("--native-host")) {
   import("./native-host.mjs");
