@@ -12,6 +12,7 @@
     "setup-native-host": "bash native-host/install.sh",
     "build:sea": "bash scripts/build-sea.sh",
     "build:pkg": "bash scripts/build-sea.sh && bash scripts/build-pkg.sh",
+    "build:zip": "bash scripts/build-sea.sh && bash scripts/build-zip.sh",
     "postinstall": "bash native-host/install.sh || true"
   },
   "dependencies": {

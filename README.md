@@ -12,24 +12,28 @@
   - **Notion 讀取在 extension 端直接 fetch**（模式參考 `../chrome-traslate-compare-plugin`），token 存 `chrome.storage.sync`，於 Options 頁設定。
 - `bridge/` — 本地 Node + TS 服務：WebSocket hub、CDP proxy、agent 編排、錄影轉 gif、pytest 匯出、git。不經手 Notion。
 
-## macOS 安裝包（.pkg，免裝 Node）
+## macOS 散佈（免裝 Node）
 
-把 bridge 打包成**單一執行檔（Node SEA，內含 node）**＋ `.pkg` 安裝包，使用者**不需裝 Node / npm**。
+bridge 打包成**單一執行檔（Node SEA，內含 node）**，使用者**不需 Node / npm**。3 模式：`server`（預設）/ `--browser-mcp` / `--native-host`。
 
-**打包者（你）**：
+兩種包裝（打包者跑）：
+
 ```bash
 cd bridge
-npm run build:pkg    # 一鍵：SEA 單一執行檔（內含 node）→ sea/dist/JT-Testing-AI-Agent-<version>.pkg
-# （或分開：npm run build:sea 只建單一執行檔）
+npm run build:zip    # 推薦：解壓→雙擊安裝的 zip（使用者層級、免管理員、免 .pkg）
+npm run build:pkg    # 或：.pkg 安裝包（系統層級，需管理員密碼）
 ```
-單一執行檔 3 模式：`server`（預設）/ `--browser-mcp` / `--native-host`。
-- `.pkg` 安裝內容：`/Library/Application Support/JT Testing AI Agent/jt-bridge` + `launcher.sh`，postinstall 自動寫入系統層級 Native Messaging host manifest（**固定 extension ID**）。
-- **未簽章**：自用右鍵→開啟即可。對外散佈需 Apple Developer ID 簽章 + notarize（指令見 build-pkg.sh 結尾）。
 
-**使用者流程（最終）**：
-1. 安裝 Chrome extension（固定 ID `gbodpgijbhekommdppfcgebacbpmedcj`）
-2. 雙擊 `.pkg` 安裝（裝 bridge + 寫 native host）
-3. 開 side panel → 按「連線」→ bridge 自動啟動
+### A. zip（推薦，最簡單）— 已端到端驗證
+產出 `sea/dist/JT-Testing-AI-Agent-bridge-mac-<version>.zip`，內含 `jt-bridge` + `安裝.command` + `解除安裝.command`。
+
+**使用者**：
+1. 解壓，把資料夾放固定位置（勿日後移動）
+2. 雙擊「**安裝.command**」（被 Gatekeeper 擋就右鍵→開啟；腳本會自動移除 quarantine、寫使用者層級 native host manifest）
+3. 載入 Chrome extension（固定 ID `gbodpgijbhekommdppfcgebacbpmedcj`）→ 開 side panel → 按「連線」→ bridge 自動啟動
+
+### B. .pkg（系統層級）
+產出 `sea/dist/JT-Testing-AI-Agent-<version>.pkg`，雙擊安裝（需管理員密碼），postinstall 寫系統層級 manifest。未簽章自用右鍵→開啟；對外散佈需 Apple Developer ID 簽章 + notarize（指令見 `scripts/build-pkg.sh` 結尾）。
 
 > 仍需各自安裝/登入的外部工具：agent CLI（`claude` / `codex` / `agy`）、`ffmpeg`、`git`、`uv`（pytest）。
 > 註：remote 模式用到 `npx chrome-devtools-mcp` 仍需 Node；attach 模式（預設）走打包進 binary 的 jt-browser，免 Node。
