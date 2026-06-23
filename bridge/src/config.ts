@@ -4,18 +4,24 @@
  * 憑證（NOTION_API_KEY / ANTHROPIC_API_KEY ...）不另存，
  * 一律從 AT repo 的 .env 載入（見 loadAtEnv）。
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 
+/** 是否為打包版（單一執行檔）。打包版的設定/資料寫到使用者資料夾。 */
+const PACKAGED = process.env.JT_PACKAGED === "1";
+
+/** 設定/資料目錄：打包版 → ~/Library/Application Support/JT Testing AI Agent；開發 → bridge 目錄。 */
+export const DATA_DIR =
+  process.env.JT_DATA_DIR ??
+  (PACKAGED
+    ? resolve(homedir(), "Library", "Application Support", "JT Testing AI Agent")
+    : resolve(fileURLToPath(import.meta.url), "..", ".."));
+
 /** bridge 本地設定檔（由 UI 寫入，例如 AT_REPO_PATH）。 */
-export const BRIDGE_CONFIG_FILE = resolve(
-  fileURLToPath(import.meta.url),
-  "..",
-  "..",
-  ".jt-bridge.json",
-);
+export const BRIDGE_CONFIG_FILE = resolve(DATA_DIR, ".jt-bridge.json");
 
 function readBridgeConfig(): Record<string, string> {
   try {
@@ -32,6 +38,7 @@ const FILE_CONFIG = readBridgeConfig();
 /** 合併寫入本地設定檔（UI 設定用）。下次啟動 bridge 生效。 */
 export function saveBridgeConfig(patch: Record<string, string>): void {
   const merged = { ...readBridgeConfig(), ...patch };
+  mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(BRIDGE_CONFIG_FILE, JSON.stringify(merged, null, 2));
 }
 

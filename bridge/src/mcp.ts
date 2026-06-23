@@ -25,15 +25,13 @@ const BROWSER_MCP_PATH = resolve(__dirname, "..", "browser-mcp.mjs");
 export function writeBrowserMcpConfig(): string {
   const dir = mkdtempSync(join(tmpdir(), "jt-ai-bmcp-"));
   const path = join(dir, "mcp.json");
-  const config = {
-    mcpServers: {
-      "jt-browser": {
-        command: "node",
-        args: [BROWSER_MCP_PATH],
-        env: { JT_BRIDGE_CDP_URL: `ws://localhost:${BRIDGE_PORT}/agent-cdp` },
-      },
-    },
-  };
+  const env = { JT_BRIDGE_CDP_URL: `ws://localhost:${BRIDGE_PORT}/agent-cdp` };
+  // 打包成單一執行檔（SEA）時：用自身 binary --browser-mcp，免依賴 node。
+  // 開發時：用 node 跑 browser-mcp.mjs。
+  const server = process.env.JT_BRIDGE_BIN
+    ? { command: process.env.JT_BRIDGE_BIN, args: ["--browser-mcp"], env }
+    : { command: "node", args: [BROWSER_MCP_PATH], env };
+  const config = { mcpServers: { "jt-browser": server } };
   writeFileSync(path, JSON.stringify(config, null, 2));
   return path;
 }

@@ -7,23 +7,17 @@
 set -euo pipefail
 
 HOST_NAME="com.jt_testing.bridge_launcher"
-EXT_ID="${1:-}"
 
-# 解析路徑
+# 固定 extension ID：來自 manifest.json 的 "key"（公鑰），與載入路徑無關、各機器一致。
+FIXED_EXT_ID="gbodpgijbhekommdppfcgebacbpmedcj"
+EXT_ID="${1:-$FIXED_EXT_ID}"
+
+# 解析路徑（依腳本所在位置）
 NATIVE_DIR="$(cd "$(dirname "$0")" && pwd)"
 BRIDGE_DIR="$(cd "$NATIVE_DIR/.." && pwd)"
-EXT_DIR="$(cd "$BRIDGE_DIR/../extension" && pwd)"
 
-# 未指定 ID → 由 extension 資料夾路徑推算 unpacked extension id
-# （Chrome 規則：sha256(絕對路徑) 前 32 個 hex，每位 0-f 映射成 a-p）
-if [ -z "$EXT_ID" ]; then
-  HASH="$(printf '%s' "$EXT_DIR" | shasum -a 256 | cut -c1-32)"
-  EXT_ID="$(printf '%s' "$HASH" | tr '0-9a-f' 'a-p')"
-  echo "（未指定 ID，依路徑推算）extension 目錄: $EXT_DIR"
-  echo "（未指定 ID，依路徑推算）extension id : $EXT_ID"
-  echo "→ 請對照 chrome://extensions 上的 ID；若不同，改用: ./install.sh <正確ID>"
-  echo ""
-fi
+echo "extension id: $EXT_ID$([ "$EXT_ID" = "$FIXED_EXT_ID" ] && echo '（固定，來自 manifest key）')"
+echo ""
 NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ]; then echo "找不到 node，請先安裝 Node.js"; exit 1; fi
 NODE_DIR="$(dirname "$NODE_BIN")"

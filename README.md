@@ -12,6 +12,28 @@
   - **Notion 讀取在 extension 端直接 fetch**（模式參考 `../chrome-traslate-compare-plugin`），token 存 `chrome.storage.sync`，於 Options 頁設定。
 - `bridge/` — 本地 Node + TS 服務：WebSocket hub、CDP proxy、agent 編排、錄影轉 gif、pytest 匯出、git。不經手 Notion。
 
+## macOS 安裝包（.pkg，免裝 Node）
+
+把 bridge 打包成**單一執行檔（Node SEA，內含 node）**＋ `.pkg` 安裝包，使用者**不需裝 Node / npm**。
+
+**打包者（你）**：
+```bash
+cd bridge
+npm run build:pkg    # 一鍵：SEA 單一執行檔（內含 node）→ sea/dist/JT-Testing-AI-Agent-<version>.pkg
+# （或分開：npm run build:sea 只建單一執行檔）
+```
+單一執行檔 3 模式：`server`（預設）/ `--browser-mcp` / `--native-host`。
+- `.pkg` 安裝內容：`/Library/Application Support/JT Testing AI Agent/jt-bridge` + `launcher.sh`，postinstall 自動寫入系統層級 Native Messaging host manifest（**固定 extension ID**）。
+- **未簽章**：自用右鍵→開啟即可。對外散佈需 Apple Developer ID 簽章 + notarize（指令見 build-pkg.sh 結尾）。
+
+**使用者流程（最終）**：
+1. 安裝 Chrome extension（固定 ID `gbodpgijbhekommdppfcgebacbpmedcj`）
+2. 雙擊 `.pkg` 安裝（裝 bridge + 寫 native host）
+3. 開 side panel → 按「連線」→ bridge 自動啟動
+
+> 仍需各自安裝/登入的外部工具：agent CLI（`claude` / `codex` / `agy`）、`ffmpeg`、`git`、`uv`（pytest）。
+> 註：remote 模式用到 `npx chrome-devtools-mcp` 仍需 Node；attach 模式（預設）走打包進 binary 的 jt-browser，免 Node。
+
 ## Agent 帳號與額度
 
 agent 跑在 **bridge（本機 Node 程序）**，它 spawn 你電腦上的 `claude` / `codex` / `antigravity` **CLI** 當子程序。
@@ -61,16 +83,12 @@ extension id = bclmhhlnfnimllooobmohlnnicholnbd
 ✓ 已安裝: .../Google/Chrome/NativeMessagingHosts/com.jt_testing.bridge_launcher.json
 ```
 
-**ID 不一致時的處理（少數情況）**
+**extension ID 已固定**
 
-推算的 ID 來自 `extension/` 資料夾的絕對路徑。若你從不同路徑載入擴充、或 Chrome 顯示的 ID 與上面印出的不同，native host 會比對失敗（連線時 log 出現 `native messaging host ... forbidden`）。此時手動指定正確 ID 重裝：
+`extension/manifest.json` 內含 `key`（公鑰），Chrome 會據此給一個**固定 ID `gbodpgijbhekommdppfcgebacbpmedcj`**，與載入路徑、機器無關。install 會自動用此固定 ID，所以**不會再有 ID 不一致問題**。
+（私鑰在 `.keys/extension_key.pem`，請保密、勿進版控；未來打包 .crx / .pkg 會用到。）
 
-```bash
-# 到 chrome://extensions 複製本擴充卡片上的 ID（32 碼小寫），然後：
-cd bridge && npm run setup-native-host -- <你的 EXTENSION_ID>
-```
-
-**首次安裝後務必做一次**：到 `chrome://extensions` **重新載入擴充**（因為擴充新增了 `nativeMessaging` 權限），再關掉重開 side panel。
+**首次安裝後務必做一次**：到 `chrome://extensions` **重新載入擴充**——載入後 ID 會變成上面的固定 ID（與 native host 已設定的一致）。因 ID 變更，Options 的 Notion Token 等設定需**重新輸入一次**。之後關掉重開 side panel。
 
 之後流程：開 side panel → 按「連線」→ bridge 沒跑會自動啟動。
 搬移專案或更換 extension id 後，重跑 `npm install` 或 `npm run setup-native-host` 即可。

@@ -8,3 +8,9 @@ __pycache__/
 
 # native host：install.sh 產生、含機器絕對路徑，不進版控
 bridge/native-host/launcher.sh
+
+# extension 簽章私鑰（保密！用於固定 extension ID / 未來打包 .crx）
+.keys/
+
+# SEA / pkg 建置產物
+bridge/sea/dist/

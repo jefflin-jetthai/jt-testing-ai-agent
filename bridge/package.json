@@ -10,6 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "setup-native-host": "bash native-host/install.sh",
+    "build:sea": "bash scripts/build-sea.sh",
+    "build:pkg": "bash scripts/build-sea.sh && bash scripts/build-pkg.sh",
     "postinstall": "bash native-host/install.sh || true"
   },
   "dependencies": {
