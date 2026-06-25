@@ -152,6 +152,12 @@ function summarizeEvent(evt: any): { kind: "system" | "text" | "tool" | "result"
   return null;
 }
 
+function hasEventType(evt: any, types: string[]): boolean {
+  if (!evt || typeof evt !== "object") return false;
+  if (typeof evt.type === "string" && types.includes(evt.type)) return true;
+  return hasEventType(evt.msg, types);
+}
+
 function isNoisyCodexWarning(line: string): boolean {
   return (
     line === "Reading additional input from stdin..." ||
@@ -200,8 +206,27 @@ export class CodexAdapter implements AgentAdapter {
       });
       let finalText = "";
       let sawFailure = false;
+      let settled = false;
+      let childExited = false;
+      let finishTimer: NodeJS.Timeout | null = null;
 
       const rl = createInterface({ input: child.stdout! });
+      const finish = (result: AgentResult) => {
+        if (settled) return;
+        settled = true;
+        if (finishTimer) clearTimeout(finishTimer);
+        rl.close();
+        if (!childExited) child.kill("SIGTERM");
+        resolve(result);
+      };
+      const scheduleFinish = (delayMs: number) => {
+        if (finishTimer || settled) return;
+        finishTimer = setTimeout(
+          () => finish({ ok: !sawFailure, finalText }),
+          delayMs,
+        );
+      };
+
       rl.on("line", (line) => {
         const t = line.trim();
         if (!t) return;
@@ -217,6 +242,8 @@ export class CodexAdapter implements AgentAdapter {
         if (out.kind === "result") finalText = out.text;
         if (out.kind === "stderr") sawFailure = true;
         opts.onEvent({ kind: out.kind, text: out.kind === "tool" ? `🔧 ${out.text}` : out.text, raw: evt });
+        if (hasEventType(evt, ["turn.completed"])) scheduleFinish(1500);
+        if (hasEventType(evt, ["turn.failed", "error"])) scheduleFinish(100);
       });
 
       child.stderr!.on("data", (d) => {
@@ -227,9 +254,12 @@ export class CodexAdapter implements AgentAdapter {
       opts.signal?.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
       child.on("error", (err) => {
         opts.onEvent({ kind: "stderr", text: `spawn error: ${err.message}` });
-        resolve({ ok: false, finalText: err.message });
+        finish({ ok: false, finalText: err.message });
       });
-      child.on("close", (code) => resolve({ ok: code === 0 && !sawFailure, finalText }));
+      child.on("close", (code) => {
+        childExited = true;
+        finish({ ok: code === 0 && !sawFailure, finalText });
+      });
     });
   }
 }

@@ -22,7 +22,7 @@ import { availableAgents, listAgents } from "./agents/index.js";
 import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
-import { tabRelay } from "./attach.js";
+import { tabRelay, agentCapture } from "./attach.js";
 import type { TestCase } from "./protocol.js";
 
 loadAtEnv();
@@ -243,10 +243,15 @@ relayWss.on("connection", (ws) => {
 agentCdpWss.on("connection", (ws) => {
   console.log("[bridge] agent-cdp connected（browser-mcp 橋接）");
   ws.on("message", async (data) => {
-    let msg: { id?: number; method?: string; params?: unknown };
+    let msg: { id?: number; method?: string; params?: unknown; jt?: string; label?: string };
     try {
       msg = JSON.parse(data.toString());
     } catch {
+      return;
+    }
+    // 「重點式錄影」擷取訊號（非 CDP 指令）：由進行中的 StepRecorder 處理
+    if (msg.jt === "capture") {
+      void agentCapture.handler?.(msg.label);
       return;
     }
     if (!msg.method) return;

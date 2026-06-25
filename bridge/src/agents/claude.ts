@@ -98,8 +98,24 @@ export class ClaudeAdapter implements AgentAdapter {
 
       let finalText = "";
       let ok = false;
+      let settled = false;
+      let childExited = false;
+      let finishTimer: NodeJS.Timeout | null = null;
 
       const rl = createInterface({ input: child.stdout });
+      const finish = (result: AgentResult) => {
+        if (settled) return;
+        settled = true;
+        if (finishTimer) clearTimeout(finishTimer);
+        rl.close();
+        if (!childExited) child.kill("SIGTERM");
+        resolve(result);
+      };
+      const scheduleFinish = () => {
+        if (finishTimer || settled) return;
+        finishTimer = setTimeout(() => finish({ ok, finalText }), 1500);
+      };
+
       rl.on("line", (line) => {
         const trimmed = line.trim();
         if (!trimmed) return;
@@ -114,6 +130,7 @@ export class ClaudeAdapter implements AgentAdapter {
         if (out.kind === "result") {
           finalText = out.text;
           ok = !evt.is_error;
+          scheduleFinish();
         }
         opts.onEvent({ kind: out.kind, text: out.text, raw: evt });
       });
@@ -130,9 +147,12 @@ export class ClaudeAdapter implements AgentAdapter {
 
       child.on("error", (err) => {
         opts.onEvent({ kind: "stderr", text: `spawn error: ${err.message}` });
-        resolve({ ok: false, finalText: err.message });
+        finish({ ok: false, finalText: err.message });
       });
-      child.on("close", () => resolve({ ok, finalText }));
+      child.on("close", () => {
+        childExited = true;
+        finish({ ok, finalText });
+      });
     });
   }
 }

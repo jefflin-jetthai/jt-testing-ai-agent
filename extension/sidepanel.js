@@ -171,6 +171,13 @@ async function connect() {
   };
   ws.onclose = () => {
     setConnected(false);
+    if (running || exporting) {
+      running = false;
+      exporting = false;
+      currentRunId = null;
+      updateActionButtons();
+      updateStopBridgeBtn();
+    }
     logLine("bridge 連線關閉");
   };
   ws.onerror = () => logLine("WebSocket 錯誤（bridge 有啟動嗎？）", "err");
@@ -252,7 +259,8 @@ function handleEvent(msg) {
       break;
     }
     case "run.done":
-      logLine(p.cancelled ? "◼ 已中止測試" : "◼ 全部測試完成", p.cancelled ? "tool" : "ok");
+      if (p.error) logLine(`◼ 測試異常結束：${p.error}`, "err");
+      else logLine(p.cancelled ? "◼ 已中止測試" : "◼ 全部測試完成", p.cancelled ? "tool" : "ok");
       currentRunId = null;
       running = false;
       updateActionButtons();
@@ -394,9 +402,13 @@ $("btn-reset").addEventListener("click", () => {
   testCases = [];
   renderCases(); // 清空清單、隱藏工具列、disable 執行/匯出
   $("page-id").value = ""; // 清空頁面網址輸入框
+  $("results").innerHTML = ""; // 清掉上一次的測試結果卡
+  $("log").innerHTML = ""; // 清掉 log
+  lastRunId = null; // 連帶 disable「檢視截圖」
   $("btn-load").disabled = false;
   $("btn-reset").disabled = true;
-  logLine("已重置案例清單", "tool");
+  updateActionButtons();
+  logLine("已重置（清空案例、結果與 log）", "tool");
 });
 $("btn-select-all").addEventListener("click", () => setAllCases(true));
 $("btn-deselect-all").addEventListener("click", () => setAllCases(false));

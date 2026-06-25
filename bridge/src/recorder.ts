@@ -9,13 +9,23 @@ import {
   existsSync,
   mkdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { CDP_BROWSER_URL } from "./config.js";
-import { tabRelay } from "./attach.js";
+import { tabRelay, agentCapture } from "./attach.js";
 import { augmentedEnv } from "./agents/env.js";
+
+const GIF_FPS = Number(process.env.JT_GIF_FPS ?? 4);
+const GIF_FRAME_INTERVAL_MS = Math.max(50, Math.round(1000 / GIF_FPS));
+const GIF_MAX_FRAMES = Number(process.env.JT_GIF_MAX_FRAMES ?? 1200);
+
+// 「重點式」步驟錄影參數
+const STEP_FPS = Number(process.env.JT_STEP_FPS ?? 1.25); // 每張截圖播放約 0.8 秒
+const STEP_MAX_FRAMES = Number(process.env.JT_STEP_MAX_FRAMES ?? 200);
+const STEP_SETTLE_MS = Number(process.env.JT_STEP_SETTLE_MS ?? 350); // 操作後等畫面穩定再擷取
 
 /** 把 frameDir 內的 frame-*.jpg 用 ffmpeg 合成 gif。回傳是否成功。 */
 function framesToGif(frameDir: string, outGifPath: string, fps: number): Promise<boolean> {
@@ -35,8 +45,10 @@ function framesToGif(frameDir: string, outGifPath: string, fps: number): Promise
       resolve(false);
     });
     ff.on("close", (code) => {
-      const ok = code === 0 && existsSync(outGifPath);
+      const size = existsSync(outGifPath) ? statSync(outGifPath).size : 0;
+      const ok = code === 0 && size > 0;
       if (!ok) console.error(`[recorder] ffmpeg 合成失敗 code=${code}: ${err.slice(-300)}`);
+      if (!ok) rmSync(outGifPath, { force: true });
       resolve(ok);
     });
   });
@@ -66,6 +78,7 @@ export class ScreencastRecorder {
   private msgId = 0;
   private frameDir: string;
   private frameCount = 0;
+  private lastFrameAt = 0;
   private started = false;
 
   constructor(
@@ -112,15 +125,22 @@ export class ScreencastRecorder {
     }
     if (msg.method === "Page.screencastFrame") {
       const { data, sessionId } = msg.params;
-      const idx = String(++this.frameCount).padStart(5, "0");
-      writeFileSync(join(this.frameDir, `frame-${idx}.jpg`), Buffer.from(data, "base64"));
+      const now = Date.now();
+      if (
+        this.frameCount < GIF_MAX_FRAMES &&
+        (this.lastFrameAt === 0 || now - this.lastFrameAt >= GIF_FRAME_INTERVAL_MS)
+      ) {
+        this.lastFrameAt = now;
+        const idx = String(++this.frameCount).padStart(5, "0");
+        writeFileSync(join(this.frameDir, `frame-${idx}.jpg`), Buffer.from(data, "base64"));
+      }
       // 必須 ack，否則 Chrome 會停止推送後續 frame
       this.send("Page.screencastFrameAck", { sessionId });
     }
   }
 
   /** 停止錄影並用 ffmpeg 合成 gif。回傳 gif 路徑（無 frame 則 null）。 */
-  async stop(fps = 4): Promise<string | null> {
+  async stop(fps = GIF_FPS): Promise<string | null> {
     if (this.started) {
       this.send("Page.stopScreencast");
       await new Promise((r) => setTimeout(r, 150));
@@ -139,14 +159,14 @@ export class ScreencastRecorder {
 }
 
 /**
- * attach 模式錄影：透過 extension 的 chrome.debugger（tabRelay）下 Page.startScreencast，
- * 收 Page.screencastFrame 事件存成 jpg，結束以 ffmpeg 合成 gif。
- * （browser-mcp 的操作走 tabRelay 的 request/response，事件通道由本錄影器獨佔，互不干擾。）
+ * attach 模式「重點式」錄影：不連續錄整段，而是在 agent 每個關鍵操作
+ * （navigate/click/fill/wait_for）後，經 agentCapture 掛鉤以 Page.captureScreenshot
+ * 擷取一張截圖，串成精簡的步驟式 gif（每張顯示約 0.8 秒）。
  */
-export class AttachRecorder {
+export class StepRecorder {
   private frameDir: string;
   private frameCount = 0;
-  private started = false;
+  private chain: Promise<void> = Promise.resolve(); // 序列化擷取，避免漏拍
 
   constructor(
     private readonly outGifPath: string,
@@ -159,32 +179,33 @@ export class AttachRecorder {
     if (!tabRelay.connected) throw new Error("tabRelay 未連線，無法錄影");
     if (existsSync(this.frameDir)) rmSync(this.frameDir, { recursive: true, force: true });
     mkdirSync(this.frameDir, { recursive: true });
-
-    tabRelay.onEvent = (method, params: any) => {
-      if (method !== "Page.screencastFrame") return;
-      const idx = String(++this.frameCount).padStart(5, "0");
-      writeFileSync(join(this.frameDir, `frame-${idx}.jpg`), Buffer.from(params.data, "base64"));
-      // 必須 ack，否則 Chrome 停止推送後續 frame
-      void tabRelay.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId });
-    };
-
-    await tabRelay.sendCommand("Page.enable", {});
-    await tabRelay.sendCommand("Page.startScreencast", {
-      format: "jpeg",
-      quality: 60,
-      maxWidth: 900,
-      maxHeight: 900,
-      everyNthFrame: 1,
-    });
-    this.started = true;
+    agentCapture.handler = (label) => this.capture(label);
+    await this.capture("start"); // 起始畫面
   }
 
-  async stop(fps = 4): Promise<string | null> {
-    if (this.started) {
-      await tabRelay.sendCommand("Page.stopScreencast", {});
-      await new Promise((r) => setTimeout(r, 150));
+  /** 排入一張截圖（操作後）。序列化執行，確保每步都拍到、不互相覆蓋。 */
+  private capture(label?: string): Promise<void> {
+    this.chain = this.chain.then(() => this.doCapture(label)).catch(() => {});
+    return this.chain;
+  }
+
+  private async doCapture(_label?: string): Promise<void> {
+    if (this.frameCount >= STEP_MAX_FRAMES) return;
+    await new Promise((r) => setTimeout(r, STEP_SETTLE_MS)); // 等畫面穩定
+    const r = (await tabRelay.sendCommand("Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 70,
+    })) as { result?: { data?: string }; error?: unknown };
+    const data = r?.result?.data;
+    if (data) {
+      const idx = String(++this.frameCount).padStart(5, "0");
+      writeFileSync(join(this.frameDir, `frame-${idx}.jpg`), Buffer.from(data, "base64"));
     }
-    tabRelay.onEvent = null;
+  }
+
+  async stop(fps = STEP_FPS): Promise<string | null> {
+    agentCapture.handler = null;
+    await this.chain.catch(() => {}); // 等最後一張拍完
     if (this.frameCount === 0) return null;
     const ok = await framesToGif(this.frameDir, this.outGifPath, fps);
     return ok ? this.outGifPath : null;

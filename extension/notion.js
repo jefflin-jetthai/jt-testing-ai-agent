@@ -81,6 +81,17 @@ function isHeading(type) {
 
 const TC_RE = /\bTC[-_ ]?\d+/i;
 
+const CJK_NUM = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+/** 從標題開頭的序號（阿拉伯數字或一二三…）取編號；取不到回 null。 */
+function ordinalOf(text) {
+  const m = String(text).trim().match(/^[\s\W]*(\d+|[一二三四五六七八九十]+)/);
+  if (!m) return null;
+  const tok = m[1];
+  if (/^\d+$/.test(tok)) return parseInt(tok, 10);
+  if (CJK_NUM[tok]) return CJK_NUM[tok]; // 一～十
+  return null;
+}
+
 /** 區段標籤判斷 → 回傳 section key 或 null。 */
 function sectionOf(text) {
   const t = text.trim();
@@ -170,28 +181,50 @@ export async function readTestCases(pageId) {
 
   const cases = [];
   const MAX_DEPTH = 3;
+  let autoSeq = 0; // 沒有 TC 編號時的後備流水號
 
   async function walk(blockId, depth) {
     if (depth > MAX_DEPTH) return;
     const children = await getChildren(token, blockId);
     for (const b of children) {
+      if (!isHeading(b.type)) continue; // 只看 heading / toggle
       const text = blockText(b);
-      if (isHeading(b.type) && TC_RE.test(text)) {
-        const tcId = (text.match(TC_RE)[0] || "")
-          .replace(/[_ ]/, "-")
-          .toUpperCase();
+
+      // 1) 標題含 TC 編號 → 直接是一個案例
+      if (TC_RE.test(text)) {
+        const tcId = (text.match(TC_RE)[0] || "").replace(/[_ ]/, "-").toUpperCase();
         const detail = await parseTcDetail(token, b.id);
         cases.push({
           blockId: b.id,
           pageId: pid,
           tcId,
-          // 去掉開頭 emoji 與 TC 編號，留標題
           title: text.replace(/^\W*TC[-_ ]?\d+\s*/i, "").trim() || text.trim(),
           ...detail,
           meta,
         });
-      } else if (b.has_children && isHeading(b.type)) {
-        await walk(b.id, depth + 1); // 巢狀分類（如「前台回歸測試」底下）
+        continue;
+      }
+
+      if (!b.has_children) continue;
+
+      // 2) 沒有 TC 編號的 heading/toggle：先解析內容判斷它是「案例」還是「分類」。
+      //    內含 測試目的/步驟/確認項目 → 視為一個案例（如「一、xxx驗證」格式）；
+      //    否則當分類，往下遞迴找子案例（如「前台回歸測試」底下）。
+      const detail = await parseTcDetail(token, b.id);
+      const looksLikeCase =
+        detail.purpose || detail.steps.length > 0 || detail.expected.length > 0;
+      if (looksLikeCase) {
+        const n = ordinalOf(text) ?? ++autoSeq;
+        cases.push({
+          blockId: b.id,
+          pageId: pid,
+          tcId: `TC-${String(n).padStart(2, "0")}`,
+          title: text.trim(),
+          ...detail,
+          meta,
+        });
+      } else {
+        await walk(b.id, depth + 1);
       }
     }
   }

@@ -33,6 +33,15 @@ function connect() {
   });
 }
 
+// 重點式錄影：每個「步驟」後通知 bridge 擷取一張截圖（非 CDP 指令，bridge 端特別處理）。
+// 含 evaluate（量測/驗證型測試的關鍵步驟），排除 snapshot（純讀 DOM、呼叫頻繁且畫面無變化）。
+const CAPTURE_TOOLS = new Set(["navigate", "click", "fill", "wait_for", "evaluate"]);
+function signalCapture(label) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ jt: "capture", label })); } catch { /* noop */ }
+  }
+}
+
 function cdp(method, params) {
   return new Promise((resolve) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return resolve({ error: { message: "bridge CDP 通道未連線" } });
@@ -209,6 +218,7 @@ async function handle(line) {
     if (!tool) { write({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: `未知工具: ${params?.name}` }] } }); return; }
     try {
       const text = await tool.run(params.arguments || {});
+      if (CAPTURE_TOOLS.has(params.name)) signalCapture(params.name); // 關鍵操作後擷取截圖
       write({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: String(text) }] } });
     } catch (e) {
       write({ jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: `錯誤: ${e.message}` }] } });

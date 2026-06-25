@@ -24,7 +24,7 @@ import {
 } from "./mcp.js";
 import { isRelayConnected } from "./attach.js";
 import { ATTACH_SYSTEM_PROMPT, SYSTEM_PROMPT, buildRunPrompt, parseVerdict } from "./prompt.js";
-import { AttachRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
+import { StepRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
 import { writeMarkdown } from "./report.js";
 import { BRIDGE_PORT } from "./config.js";
 import type {
@@ -37,6 +37,38 @@ import type {
 type Emit = (ev: WsEvent) => void;
 
 const activeRuns = new Map<string, AbortController>();
+const RECORDER_STOP_TIMEOUT_MS = 45_000;
+
+function formatError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function artifactBaseName(tcId: string): string {
+  return (tcId || "TC")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "TC";
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} 逾時（${Math.round(ms / 1000)}s）`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 export function cancelRun(runId: string): boolean {
   const ctrl = activeRuns.get(runId);
@@ -82,121 +114,142 @@ export async function startRun(
   const ctrl = new AbortController();
   activeRuns.set(runId, ctrl);
 
-  // 非同步跑完整批，立即回 runId 讓 UI 開始顯示串流
+  // 非同步跑完整批，立即回 runId 讓 UI 開始顯示串流。
+  // 任何未預期錯誤都必須落到 finally，否則 UI 會卡在「執行中」。
   void (async () => {
     const log = (p: Omit<AgentLogPayload, "runId">) =>
       emit({ type: "agent.log", payload: { runId, ...p } });
-    const mcpConfigPath = mode === "attach" ? writeBrowserMcpConfig() : writeMcpConfig(CDP_BROWSER_URL);
-    const allowedTools = mode === "attach" ? JT_BROWSER_TOOLS : CHROME_DEVTOOLS_TOOLS;
-    const systemPrompt = mode === "attach" ? ATTACH_SYSTEM_PROMPT : SYSTEM_PROMPT;
+    let runError: string | undefined;
+    try {
+      const mcpConfigPath = mode === "attach" ? writeBrowserMcpConfig() : writeMcpConfig(CDP_BROWSER_URL);
+      const allowedTools = mode === "attach" ? JT_BROWSER_TOOLS : CHROME_DEVTOOLS_TOOLS;
+      const systemPrompt = mode === "attach" ? ATTACH_SYSTEM_PROMPT : SYSTEM_PROMPT;
 
-    log({
-      kind: "system",
-      text:
-        mode === "attach"
-          ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。agent=${agentName}`
-          : `Chrome 已連線：${probe.version}（${probe.pages?.length ?? 0} 個分頁）。agent=${agentName}`,
-    });
-
-    const runDir = join(ARTIFACTS_DIR, runId);
-    mkdirSync(runDir, { recursive: true });
-
-    for (const tc of payload.cases) {
-      if (ctrl.signal.aborted) break;
-      const startedAt = Date.now();
-      emit({ type: "run.step", payload: { runId, tcId: tc.tcId, phase: "start", title: tc.title } });
-
-      // 開始錄影（每測項一段；失敗不阻擋測試）。attach→經 chrome.debugger；remote→連 9222。
-      const gifPathOut = join(runDir, `${tc.tcId}.gif`);
-      const gifTmp = join(runDir, `.tmp-${tc.tcId}`);
-      let recorder: ScreencastRecorder | AttachRecorder | null = null;
-      try {
-        if (mode === "attach") {
-          recorder = new AttachRecorder(gifPathOut, gifTmp);
-          await recorder.start();
-        } else {
-          const pageWs = await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL);
-          if (pageWs) {
-            recorder = new ScreencastRecorder(pageWs, gifPathOut, gifTmp);
-            await recorder.start();
-          } else {
-            log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
-          }
-        }
-      } catch (e) {
-        log({ tcId: tc.tcId, kind: "stderr", text: `錄影啟動失敗：${(e as Error).message}` });
-        recorder = null;
-      }
-
-      const prompt = buildRunPrompt(tc, payload.target);
-      let finalText = "";
-      try {
-        const res = await agent.run({
-          prompt,
-          systemPrompt,
-          cwd: AT_REPO_PATH,
-          mcpConfigPath,
-          allowedTools,
-          model: agentName === "claude" ? CLAUDE_MODEL : undefined,
-          signal: ctrl.signal,
-          onEvent: (e) => log({ tcId: tc.tcId, kind: e.kind, text: e.text }),
-        });
-        finalText = res.finalText;
-      } catch (err) {
-        finalText = err instanceof Error ? err.message : String(err);
-      }
-
-      // 被使用者中止 → 不產出 markdown / 結果，直接結束
-      if (ctrl.signal.aborted) {
-        if (recorder) await recorder.stop().catch(() => {});
-        log({ tcId: tc.tcId, kind: "system", text: "已中止，略過此測項報告" });
-        break;
-      }
-
-      let gifPath: string | undefined;
-      if (recorder) {
-        try {
-          gifPath = (await recorder.stop()) ?? undefined;
-          if (gifPath) log({ tcId: tc.tcId, kind: "system", text: `🎞 已產出錄影：${gifPath}` });
-        } catch (e) {
-          log({ tcId: tc.tcId, kind: "stderr", text: `錄影合成失敗：${(e as Error).message}` });
-        }
-      }
-
-      const verdict = parseVerdict(finalText);
-      const durationMs = Date.now() - startedAt;
-      const gifFileName = gifPath ? `${tc.tcId}.gif` : undefined;
-
-      // 產生 Notion 友善 markdown 並寫檔
-      const mdPath = join(runDir, `${tc.tcId}.md`);
-      const markdown = writeMarkdown(mdPath, {
-        tc,
-        status: verdict.status,
-        summary: verdict.summary || finalText.slice(0, 200),
-        finalText,
-        agentName,
-        durationMs,
-        gifFileName,
+      log({
+        kind: "system",
+        text:
+          mode === "attach"
+            ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。agent=${agentName}`
+            : `Chrome 已連線：${probe.version}（${probe.pages?.length ?? 0} 個分頁）。agent=${agentName}`,
       });
 
-      const result: RunResultPayload = {
-        runId,
-        tcId: tc.tcId,
-        status: verdict.status,
-        summary: verdict.summary || finalText.slice(0, 200),
-        markdown,
-        markdownPath: mdPath,
-        gifPath,
-        gifUrl: gifFileName
-          ? `http://localhost:${BRIDGE_PORT}/artifacts/${runId}/${gifFileName}`
-          : undefined,
-        durationMs,
-      };
-      emit({ type: "run.result", payload: result });
-    }
+      const runDir = join(ARTIFACTS_DIR, runId);
+      mkdirSync(runDir, { recursive: true });
 
-    activeRuns.delete(runId);
-    emit({ type: "run.done", payload: { runId, cancelled: ctrl.signal.aborted } });
+      for (const tc of payload.cases) {
+        if (ctrl.signal.aborted) break;
+        const startedAt = Date.now();
+        const artifactBase = artifactBaseName(tc.tcId);
+        emit({ type: "run.step", payload: { runId, tcId: tc.tcId, phase: "start", title: tc.title } });
+
+        // 開始錄影（每測項一段；失敗不阻擋測試）。attach→經 chrome.debugger；remote→連 9222。
+        const gifPathOut = join(runDir, `${artifactBase}.gif`);
+        const gifTmp = join(runDir, `.tmp-${artifactBase}`);
+        let recorder: ScreencastRecorder | StepRecorder | null = null;
+        const stopRecorder = async (): Promise<string | undefined> => {
+          if (!recorder) return undefined;
+          try {
+            return (
+              (await withTimeout(
+                recorder.stop(),
+                RECORDER_STOP_TIMEOUT_MS,
+                "錄影停止/合成",
+              )) ?? undefined
+            );
+          } catch (e) {
+            log({ tcId: tc.tcId, kind: "stderr", text: `錄影停止失敗：${formatError(e)}` });
+            return undefined;
+          } finally {
+            recorder = null;
+          }
+        };
+
+        try {
+          if (mode === "attach") {
+            recorder = new StepRecorder(gifPathOut, gifTmp);
+            await recorder.start();
+          } else {
+            const pageWs = await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL);
+            if (pageWs) {
+              recorder = new ScreencastRecorder(pageWs, gifPathOut, gifTmp);
+              await recorder.start();
+            } else {
+              log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
+            }
+          }
+        } catch (e) {
+          log({ tcId: tc.tcId, kind: "stderr", text: `錄影啟動失敗：${formatError(e)}` });
+          recorder = null;
+        }
+
+        const prompt = buildRunPrompt(tc, payload.target);
+        let finalText = "";
+        try {
+          const res = await agent.run({
+            prompt,
+            systemPrompt,
+            cwd: AT_REPO_PATH,
+            mcpConfigPath,
+            allowedTools,
+            model: agentName === "claude" ? CLAUDE_MODEL : undefined,
+            signal: ctrl.signal,
+            onEvent: (e) => log({ tcId: tc.tcId, kind: e.kind, text: e.text }),
+          });
+          finalText = res.finalText || (res.ok ? "" : "agent 執行失敗（未回傳錯誤內容）");
+        } catch (err) {
+          finalText = formatError(err);
+        }
+
+        // 被使用者中止 → 不產出 markdown / 結果，直接結束
+        if (ctrl.signal.aborted) {
+          await stopRecorder();
+          log({ tcId: tc.tcId, kind: "system", text: "已中止，略過此測項報告" });
+          break;
+        }
+
+        const gifPath = await stopRecorder();
+        if (gifPath) log({ tcId: tc.tcId, kind: "system", text: `已產出錄影：${gifPath}` });
+
+        const verdict = parseVerdict(finalText);
+        const durationMs = Date.now() - startedAt;
+        const gifFileName = gifPath ? `${artifactBase}.gif` : undefined;
+
+        // 產生 Notion 友善 markdown 並寫檔
+        const mdPath = join(runDir, `${artifactBase}.md`);
+        const markdown = writeMarkdown(mdPath, {
+          tc,
+          status: verdict.status,
+          summary: verdict.summary || finalText.slice(0, 200),
+          finalText,
+          agentName,
+          durationMs,
+          gifFileName,
+          targetUrl: payload.target?.url,
+        });
+
+        const result: RunResultPayload = {
+          runId,
+          tcId: tc.tcId,
+          status: verdict.status,
+          summary: verdict.summary || finalText.slice(0, 200),
+          markdown,
+          markdownPath: mdPath,
+          gifPath,
+          gifUrl: gifFileName
+            ? `http://localhost:${BRIDGE_PORT}/artifacts/${runId}/${gifFileName}`
+            : undefined,
+          durationMs,
+        };
+        emit({ type: "run.result", payload: result });
+      }
+    } catch (err) {
+      runError = formatError(err);
+      log({ kind: "stderr", text: `run 異常結束：${runError}` });
+      emit({ type: "error", payload: { runId, error: runError } });
+    } finally {
+      activeRuns.delete(runId);
+      emit({ type: "run.done", payload: { runId, cancelled: ctrl.signal.aborted, error: runError } });
+    }
   })();
 
   return { runId };
