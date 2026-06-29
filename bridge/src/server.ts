@@ -4,6 +4,7 @@
  * 目前實作 Phase 0（連線 / hello / config）與 Phase 1（notion.listTestCases）。
  * Phase 2+ 的 run.start / export 等 handler 先回 "not implemented"，逐步補上。
  */
+import { spawn } from "node:child_process";
 import { createReadStream, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -171,6 +172,7 @@ function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
     .join("\n");
   const hasImg = entries.some((e) => e.isDirectory() || isImg(e.name));
   const clearUrl = base.replace("/artifacts/", "/artifacts-clear/");
+  const openUrl = base.replace("/artifacts/", "/artifacts-open/");
   return `<!doctype html><meta charset="utf-8"><title>截圖 / 錄影 — ${urlPath}</title>
 <style>
   body{font-family:-apple-system,system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:16px}
@@ -180,12 +182,21 @@ function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
   figure img{max-width:300px;display:block;border-radius:4px}
   figcaption{font-size:12px;color:#aaa;margin-top:6px;word-break:break-all}
   .item{padding:4px 0}a{color:#4fc1ff}
-  button{background:#6e4949;color:#fff;border:0;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px}
+  button{color:#fff;border:0;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px;margin-right:6px}
   button:disabled{background:#3a3a3a;color:#888;cursor:not-allowed}
+  #opn{background:#3a6ea5}#clr{background:#6e4949}
 </style>
-<h1>${urlPath}</h1>${hasImg ? `<button id="clr" onclick="clearImgs()">🗑 清除圖片</button>` : ""}
+<h1>${urlPath}</h1><button id="opn" onclick="openDir()">📂 開啟資料夾</button>${hasImg ? `<button id="clr" onclick="clearImgs()">🗑 清除圖片</button>` : ""}
 <div class="grid">${items || "<p>（此目錄沒有檔案）</p>"}</div>
 <script>
+async function openDir(){
+  const b=document.getElementById('opn');
+  try{
+    const r=await fetch(${JSON.stringify(openUrl)});
+    const j=await r.json();
+    if(!j.ok) alert('開啟失敗：'+(j.error||''));
+  }catch(e){ alert('開啟失敗：'+e.message); }
+}
 async function clearImgs(){
   if(!confirm('確定清除此次測試的所有截圖 / 錄影？（報告 .md 會保留，無法復原）')) return;
   const b=document.getElementById('clr'); b.disabled=true; b.textContent='清除中…';
@@ -233,6 +244,35 @@ const http = createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
     res.end(JSON.stringify({ ok: true, removed }));
+    return;
+  }
+  // 在系統檔案管理員開啟某次產出資料夾：GET /artifacts-open/<runId>
+  if (url.startsWith("/artifacts-open/")) {
+    const rel = normalize(decodeURIComponent(url.slice("/artifacts-open/".length))).replace(/\/+$/, "");
+    if (!rel || rel.includes("..")) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ ok: false, error: "forbidden" }));
+      return;
+    }
+    const dir = join(artifactsDir(), rel);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ ok: false, error: "not found" }));
+      return;
+    }
+    // macOS: open；Windows: explorer；Linux: xdg-open
+    const cmd =
+      process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    try {
+      spawn(cmd, [dir], { detached: true, stdio: "ignore" }).unref();
+    } catch {
+      /* 失敗仍回 ok:false 由前端提示 */
+      res.writeHead(500, { "content-type": "application/json", "access-control-allow-origin": "*" });
+      res.end(JSON.stringify({ ok: false, error: "open failed" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    res.end(JSON.stringify({ ok: true, path: dir }));
     return;
   }
   // 產出物（gif / markdown）瀏覽：/artifacts/<runId>/<file>
