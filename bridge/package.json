@@ -1,6 +1,6 @@
 {
   "name": "jt-testing-ai-agent-bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Local bridge server: WS hub + CDP proxy + agent orchestration for the jt-testing-ai-agent Chrome extension",
   "type": "module",
