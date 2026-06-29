@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JT Testing AI Agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnGWPMDW3lJJ1yEEkRgvmnXceJHZUWrqOuOovQ6DGqeStrsyi9ni7LSgoqLSDA1TXJxzAPswAqDZniIdwVxeR6pe/EDIm3VF+tyPCOOroQTWWR+SiAbQdJf0Is7VsAuNTBB4HiXjgm85MCUpWGgPnT9QSQ0MqDobMOuFJjHDup19JyAodgTWhnsojHTZV0qz5o+EFQ+33FA24RrbkpqtM0GiDeNf2dZoUeJm+ZrUBMmkgXytdWWoFx6voebS/jzslq6e7/BYfYA3z4BkpNg5BFEOFOI3yVT9BG2ox8mQx4YOtUA+eVm7zZdYjVaCRO6+4o14O0DtqsfHUku9INGmz3wIDAQAB",
   "description": "讀 Notion 測試案例 → AI Agent 接管當前分頁執行 → 產出 markdown + gif → 可固化成 pytest commit",
   "permissions": [
@@ -22,7 +22,13 @@
     "type": "module"
   },
   "action": {
-    "default_title": "JT Testing AI Agent"
+    "default_title": "JT Testing AI Agent",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -31,5 +37,10 @@
     "page": "options.html",
     "open_in_tab": true
   },
-  "icons": {}
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }

@@ -187,13 +187,18 @@ async function connect() {
   };
   ws.onclose = () => {
     setConnected(false);
+    // bridge 斷線 → cdp-relay 失效，接管已不可用，重置狀態讓按鈕回到正確 enable/disable
+    if (attachReady) {
+      attachReady = false;
+      $("attach-status").textContent = "🔴 未接管";
+    }
     if (running || exporting) {
       running = false;
       exporting = false;
       currentRunId = null;
-      updateActionButtons();
-      updateStopBridgeBtn();
     }
+    updateActionButtons();
+    updateStopBridgeBtn();
     logLine("bridge 連線關閉");
   };
   ws.onerror = () => logLine("WebSocket 錯誤（bridge 有啟動嗎？）", "err");
@@ -217,6 +222,7 @@ async function connect() {
 let currentRunId = null;
 let lastRunId = null; // 最近一次 run（執行結束後仍保留，供「檢視截圖」用）
 let attachReady = false; // attach 模式：是否已成功接管當前分頁
+let attaching = false; // attach 模式：接管/解除進行中
 let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
 let running = false; // 測試執行中
 let exporting = false; // 匯出 pytest 中
@@ -280,13 +286,28 @@ function updateActionButtons() {
   $("btn-view-shots").disabled = !lastRunId; // 有跑過才可檢視截圖
   $("btn-export").disabled = running || exporting || !(hasCases && bridgeConnected);
   $("btn-export-cancel").disabled = !exporting; // 匯出中才可停止
+  updateAttachButtons();
+}
+
+/**
+ * 接管 / 解除按鈕的 enable/disable 狀態（attach 模式兩顆都顯示）：
+ * - 接管：bridge 已連線、尚未接管、非進行中、非執行中才可按
+ * - 解除：已接管、非進行中、非執行中才可按
+ */
+function updateAttachButtons() {
+  const attachMode = $("mode-select").value === "attach";
+  const attach = $("btn-attach");
+  const detach = $("btn-detach");
+  attach.style.display = attachMode ? "inline-block" : "none";
+  detach.style.display = attachMode ? "inline-block" : "none";
+  if (!attachMode) return;
+  attach.disabled = !bridgeConnected || attachReady || attaching || running;
+  detach.disabled = !attachReady || attaching || running;
 }
 
 /** 依模式切換 attach / launch 按鈕＋狀態顯示，並更新動作鈕狀態。 */
 function applyModeUI() {
   const attachMode = $("mode-select").value === "attach";
-  $("btn-attach").style.display = attachMode ? "inline-block" : "none";
-  $("btn-detach").style.display = attachMode && attachReady ? "inline-block" : "none";
   $("btn-launch-chrome").style.display = attachMode ? "none" : "inline-block";
   // 狀態指示：只顯示對應模式那一個（在各自按鈕右側）
   $("attach-status").style.display = attachMode ? "inline" : "none";
@@ -603,14 +624,14 @@ function relayUrl() {
 }
 
 $("btn-attach").addEventListener("click", async () => {
-  $("btn-attach").disabled = true;
+  attaching = true;
+  updateActionButtons();
   logLine("接管當前分頁中…（Chrome 會出現「擴充功能正在偵錯」橫幅，屬正常）", "tool");
   try {
     const r = await chrome.runtime.sendMessage({ cmd: "attachCurrentTab", relayUrl: relayUrl() });
     if (r?.ok) {
       attachReady = true;
       $("attach-status").textContent = `🟢 已接管：${r.title || r.url || ""}`;
-      $("btn-detach").style.display = "inline-block";
       logLine(`已接管當前分頁：${r.url || ""}`, "ok");
     } else {
       logLine(`接管失敗：${r?.error || "未知錯誤"}`, "err");
@@ -618,20 +639,25 @@ $("btn-attach").addEventListener("click", async () => {
   } catch (e) {
     logLine(`接管失敗：${e.message}`, "err");
   } finally {
-    $("btn-attach").disabled = false;
+    attaching = false;
     updateActionButtons();
     updateStopBridgeBtn();
   }
 });
 
 $("btn-detach").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ cmd: "detachTab" });
-  attachReady = false;
-  $("attach-status").textContent = "🔴 未接管";
-  $("btn-detach").style.display = "none";
+  attaching = true;
   updateActionButtons();
-  updateStopBridgeBtn();
-  logLine("已解除接管", "tool");
+  try {
+    await chrome.runtime.sendMessage({ cmd: "detachTab" });
+    attachReady = false;
+    $("attach-status").textContent = "🔴 未接管";
+    logLine("已解除接管", "tool");
+  } finally {
+    attaching = false;
+    updateActionButtons();
+    updateStopBridgeBtn();
+  }
 });
 
 $("btn-launch-chrome").addEventListener("click", async () => {

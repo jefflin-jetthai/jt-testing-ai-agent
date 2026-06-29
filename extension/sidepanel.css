@@ -87,6 +87,9 @@ button {
   cursor: pointer;
 }
 button:disabled { background: #3a3a3a; color: var(--muted); cursor: not-allowed; }
+/* 接管/解除：enabled 時的色（disabled 由上面 button:disabled 接管，故行內背景移到此） */
+#btn-attach:not(:disabled) { background: #1a7f37; }
+#btn-detach:not(:disabled) { background: #6e4949; }
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
