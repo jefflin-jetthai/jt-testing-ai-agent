@@ -60,15 +60,39 @@ function bundlePath(): string {
 
 const FIXED_EXT_ID = "gbodpgijbhekommdppfcgebacbpmedcj";
 
-/** 從 Chrome/Chromium 各 profile 的 Preferences 找「載入未封裝」本擴充的絕對路徑。 */
-function findExtensionFromChrome(): string {
+/** 各平台 Chrome/Chromium/Edge 的 user-data 根目錄（其下含各 profile）。 */
+function chromeUserDataDirs(): string[] {
   const home = homedir();
-  const bases = [
-    join(home, "Library", "Application Support", "Google", "Chrome"),
-    join(home, "Library", "Application Support", "Google", "Chrome Beta"),
-    join(home, "Library", "Application Support", "Chromium"),
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+    return [
+      join(local, "Google", "Chrome", "User Data"),
+      join(local, "Google", "Chrome Beta", "User Data"),
+      join(local, "Chromium", "User Data"),
+      join(local, "Microsoft", "Edge", "User Data"),
+    ];
+  }
+  if (process.platform === "darwin") {
+    const as = join(home, "Library", "Application Support");
+    return [
+      join(as, "Google", "Chrome"),
+      join(as, "Google", "Chrome Beta"),
+      join(as, "Chromium"),
+      join(as, "Microsoft Edge"),
+    ];
+  }
+  const cfg = process.env.XDG_CONFIG_HOME ?? join(home, ".config"); // linux
+  return [
+    join(cfg, "google-chrome"),
+    join(cfg, "google-chrome-beta"),
+    join(cfg, "chromium"),
+    join(cfg, "microsoft-edge"),
   ];
-  for (const baseDir of bases) {
+}
+
+/** 從 Chrome/Chromium/Edge 各 profile 的 Preferences 找「載入未封裝」本擴充的絕對路徑（跨平台）。 */
+function findExtensionFromChrome(): string {
+  for (const baseDir of chromeUserDataDirs()) {
     if (!existsSync(baseDir)) continue;
     let profiles: string[];
     try {

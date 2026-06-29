@@ -36,6 +36,11 @@ if [ -d "$ROOT/../extension" ]; then
   find "$STAGE/extension" -name ".DS_Store" -delete 2>/dev/null || true
 fi
 
+# 帶上 Windows 安裝/解除安裝 .bat（與 bundle.cjs 同層；.bat 內以 %~dp0bundle.cjs 取用）
+if [ -d "$ROOT/native-host/windows" ]; then
+  find "$ROOT/native-host/windows" -maxdepth 1 -name "*.bat" -exec cp {} "$STAGE/" \;
+fi
+
 # Install.command：偵測本機 node、把 bundle 複製到「非 TCC 保護目錄」、寫 native host manifest
 # （重要：Chrome 啟動 native host 時不能在 ~/Downloads /Desktop /Documents 等 TCC 保護目錄執行，
 #   故複製到 ~/Library/Application Support，避開 TCC，與解壓位置無關。）

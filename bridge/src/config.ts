@@ -13,12 +13,22 @@ import { config as loadDotenv } from "dotenv";
 /** 是否為打包版（單一執行檔）。打包版的設定/資料寫到使用者資料夾。 */
 const PACKAGED = process.env.JT_PACKAGED === "1";
 
-/** 設定/資料目錄：打包版 → ~/Library/Application Support/JT Testing AI Agent；開發 → bridge 目錄。 */
+const APP_NAME = "JT Testing AI Agent";
+
+/** 打包版的使用者資料目錄（跨平台）。 */
+function packagedDataDir(): string {
+  const home = homedir();
+  if (process.platform === "win32")
+    return resolve(process.env.APPDATA ?? resolve(home, "AppData", "Roaming"), APP_NAME);
+  if (process.platform === "darwin")
+    return resolve(home, "Library", "Application Support", APP_NAME);
+  return resolve(process.env.XDG_CONFIG_HOME ?? resolve(home, ".config"), APP_NAME); // linux
+}
+
+/** 設定/資料目錄：打包版 → 平台使用者資料夾（win:%APPDATA% / mac:~/Library / linux:~/.config）；開發 → bridge 目錄。 */
 export const DATA_DIR =
   process.env.JT_DATA_DIR ??
-  (PACKAGED
-    ? resolve(homedir(), "Library", "Application Support", "JT Testing AI Agent")
-    : resolve(fileURLToPath(import.meta.url), "..", ".."));
+  (PACKAGED ? packagedDataDir() : resolve(fileURLToPath(import.meta.url), "..", ".."));
 
 /** bridge 本地設定檔（由 UI 寫入，例如 AT_REPO_PATH）。 */
 export const BRIDGE_CONFIG_FILE = resolve(DATA_DIR, ".jt-bridge.json");
