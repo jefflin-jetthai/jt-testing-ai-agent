@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "setup-native-host": "bash native-host/install.sh",
     "build:zip": "bash scripts/build-zip.sh",
+    "release": "bash scripts/release.sh",
     "postinstall": "bash native-host/install.sh || true"
   },
   "dependencies": {

@@ -13,7 +13,16 @@
   `https://api.github.com/repos/<owner>/<repo>/releases/latest`。
 - 1.0.0 使用者沒有偵測碼，需**手動更新到 1.0.1 一次**，之後才會自動偵測。
 
-## 每次發版步驟
+## 快速發版（一行）
+
+```bash
+cd bridge && npm run release -- 1.0.4
+```
+自動：bump 版號（manifest + package.json）→ 打包 → commit + tag `v1.0.4`。
+裝了 **gh CLI** 會連 `git push` 與建 GitHub Release（含上傳 asset）都自動；
+沒裝則印出「push + 上傳哪兩個 asset」的步驟。需工作區乾淨才會執行。
+
+## 每次發版步驟（手動，等同上面腳本）
 
 1. **升版號**（兩處要一致）：
    - `extension/manifest.json` 的 `version`
