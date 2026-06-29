@@ -17,7 +17,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, extname, join, normalize } from "node:path";
+import { homedir } from "node:os";
+import { dirname, extname, isAbsolute, join, normalize } from "node:path";
 import { unzipSync } from "fflate";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -57,7 +58,49 @@ function bundlePath(): string {
   return /\.(c?js)$/.test(p) ? p : "";
 }
 
-/** 安裝時記下的 extension 資料夾路徑（bundle 同層 extension-dir.txt）；無則回空。 */
+const FIXED_EXT_ID = "gbodpgijbhekommdppfcgebacbpmedcj";
+
+/** 從 Chrome/Chromium 各 profile 的 Preferences 找「載入未封裝」本擴充的絕對路徑。 */
+function findExtensionFromChrome(): string {
+  const home = homedir();
+  const bases = [
+    join(home, "Library", "Application Support", "Google", "Chrome"),
+    join(home, "Library", "Application Support", "Google", "Chrome Beta"),
+    join(home, "Library", "Application Support", "Chromium"),
+  ];
+  for (const baseDir of bases) {
+    if (!existsSync(baseDir)) continue;
+    let profiles: string[];
+    try {
+      profiles = readdirSync(baseDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      continue;
+    }
+    for (const prof of profiles) {
+      // 未封裝擴充的設定多半在 "Secure Preferences"，少數在 "Preferences"
+      for (const fname of ["Secure Preferences", "Preferences"]) {
+        const pref = join(baseDir, prof, fname);
+        if (!existsSync(pref)) continue;
+        try {
+          const j = JSON.parse(readFileSync(pref, "utf8"));
+          const p = j?.extensions?.settings?.[FIXED_EXT_ID]?.path;
+          // 未封裝擴充的 path 是絕對路徑（使用者選的資料夾）；商店版才是相對
+          if (typeof p === "string" && isAbsolute(p) && existsSync(join(p, "manifest.json"))) return p;
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  }
+  return "";
+}
+
+/**
+ * 取本擴充的 extension 資料夾路徑：優先用 Install.command 記下的 extension-dir.txt，
+ * 否則自動從 Chrome Preferences 找（免依賴 Install.command）。
+ */
 function extensionDir(): string {
   try {
     const f = join(dirname(bundlePath()), "extension-dir.txt");
@@ -68,7 +111,7 @@ function extensionDir(): string {
   } catch {
     /* ignore */
   }
-  return "";
+  return findExtensionFromChrome();
 }
 
 /**

@@ -164,26 +164,24 @@ async function checkUpdate() {
   }
 }
 
-// 一鍵更新：bridge 下載新 bundle（＋extension 檔）覆蓋自己 → 退出；
-// 若 extension 也更新了就自動 reload 擴充，否則重新連線。
-$("btn-update-bridge").addEventListener("click", async () => {
-  if (!updateBundleUrl) return;
+let updating = false;
+
+/** 更新收尾（只跑一次）：res 為 bridge 乾淨回應（可能為 null＝bridge 已 exit、由 ws.onclose 觸發）。 */
+function finishUpdate(res) {
+  if (!updating) return;
+  updating = false;
   const btn = $("btn-update-bridge");
-  btn.disabled = true;
-  btn.textContent = "更新中…";
-  logLine("更新中（bridge 下載新版，含 extension）…", "tool");
-  let res = null;
-  try {
-    res = await call("bridge.selfUpdate", { bundleUrl: updateBundleUrl, zipUrl: updateZipUrl }, 120000);
-  } catch {
-    /* bridge 更新後會 exit，ws 斷線屬正常；res 維持 null */
-  }
+  btn.disabled = false;
+  btn.textContent = "更新";
   $("update-bar").style.display = "none";
-  if (res?.extensionUpdated) {
-    logLine("已更新 bridge 與 extension，重新載入擴充…", "ok");
-    setTimeout(() => chrome.runtime.reload(), 1000); // 從磁碟載入新 extension 檔
+  // 有乾淨回應 → 用其 extensionUpdated；沒有 → 以「有送 zip」保守推測（reload 無害）
+  const extUpdated = res ? !!res.extensionUpdated : !!updateZipUrl;
+  if (extUpdated) {
+    logLine("更新完成，重新載入擴充以套用新版…", "ok");
+    setTimeout(() => {
+      try { chrome.runtime.reload(); } catch { connect(); }
+    }, 800);
   } else {
-    // bridge 已更新；extension 未自動更新（未記錄路徑/舊安裝）→ 重連並提供手動下載
     logLine("bridge 已更新，重新連線…", "ok");
     if (updateZipUrl) {
       const dl = $("update-download");
@@ -193,7 +191,31 @@ $("btn-update-bridge").addEventListener("click", async () => {
       $("btn-update-bridge").style.display = "none";
       $("update-bar").style.display = "flex";
     }
-    setTimeout(() => connect(), 1800);
+    setTimeout(() => connect(), 1500);
+  }
+}
+
+// 一鍵更新：bridge 下載新 bundle（＋extension 檔）覆蓋自己 → 退出。
+// 不強依賴回應：bridge 退出時 ws 會 close → 由 ws.onclose 觸發 finishUpdate，避免卡在「更新中…」。
+$("btn-update-bridge").addEventListener("click", async () => {
+  if (!updateBundleUrl || updating) return;
+  updating = true;
+  const btn = $("btn-update-bridge");
+  btn.disabled = true;
+  btn.textContent = "更新中…";
+  logLine("更新中（bridge 下載新版並重啟）…", "tool");
+  setTimeout(() => finishUpdate(null), 45000); // 安全網：避免任何情況下永久卡住
+  try {
+    const res = await call("bridge.selfUpdate", { bundleUrl: updateBundleUrl, zipUrl: updateZipUrl }, 40000);
+    finishUpdate(res); // 收到乾淨回應
+  } catch (e) {
+    // bridge 回錯誤（仍連線）→ 顯示並重置；bridge 已 exit（ws 斷）→ 交給 onclose 收尾
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      updating = false;
+      btn.disabled = false;
+      btn.textContent = "更新";
+      logLine(`更新失敗：${e.message}`, "err");
+    }
   }
 });
 $("update-dismiss").addEventListener("click", () => {
@@ -270,6 +292,8 @@ async function connect() {
   };
   ws.onclose = () => {
     setConnected(false);
+    // 更新中 bridge 自我更新後會 exit → ws 在此關閉，觸發收尾（reload / 重連），避免卡「更新中…」
+    if (updating) finishUpdate(null);
     // bridge 斷線 → cdp-relay 失效，接管已不可用，重置狀態讓按鈕回到正確 enable/disable
     if (attachReady) {
       attachReady = false;
