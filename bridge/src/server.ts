@@ -5,7 +5,15 @@
  * Phase 2+ 的 run.start / export 等 handler 先回 "not implemented"，逐步補上。
  */
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -38,6 +46,34 @@ function send(ws: WebSocket, msg: WsResponse | WsEvent): void {
 /** 廣播事件給所有連線的 extension（agent log / 進度等用）。 */
 export function broadcast(event: WsEvent): void {
   for (const ws of clients) send(ws, event);
+}
+
+/**
+ * 下載新的 bundle.cjs 覆蓋目前執行中的 bundle（打包版自我更新）。
+ * 僅打包版（process.argv[1] 指向 .cjs/.js）可用；會先備份 .bak。
+ */
+async function selfUpdateBundle(
+  bundleUrl?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const target = process.env.JT_BRIDGE_SCRIPT || process.argv[1] || "";
+  if (!/\.(c?js)$/.test(target)) {
+    return { ok: false, error: "開發模式不支援自我更新（請用 git pull / 重新打包）" };
+  }
+  if (!bundleUrl || !/^https:\/\//i.test(bundleUrl)) {
+    return { ok: false, error: "無效的更新來源（需 https 網址）" };
+  }
+  try {
+    const resp = await fetch(bundleUrl);
+    if (!resp.ok) return { ok: false, error: `下載失敗 HTTP ${resp.status}` };
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length < 1000) return { ok: false, error: "下載內容異常（過小）" };
+    if (existsSync(target)) copyFileSync(target, target + ".bak"); // 備份舊版可回復
+    writeFileSync(target, buf);
+    console.log(`[bridge] self-updated bundle (${buf.length} bytes) ← ${bundleUrl}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function handleRequest(req: WsRequest): Promise<WsResponse> {
@@ -83,6 +119,16 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
         console.log("[bridge] shutdown requested by UI");
         setTimeout(() => process.exit(0), 150);
         return { ...base, result: { stopping: true } };
+
+      case "bridge.selfUpdate": {
+        // 下載新的 bundle.cjs 覆蓋自身，再結束程序 → native host 下次連線會啟動新 bundle
+        const { bundleUrl } = (req.payload as { bundleUrl?: string }) ?? {};
+        const out = await selfUpdateBundle(bundleUrl);
+        if (out.ok) setTimeout(() => process.exit(0), 250); // 退出讓 native host 以新 bundle 重啟
+        return out.ok
+          ? { ...base, result: { updated: true, restarting: true } }
+          : { id: req.id, ok: false, error: out.error };
+      }
 
       case "chrome.launch": {
         const { url } = (req.payload as { url?: string }) ?? {};

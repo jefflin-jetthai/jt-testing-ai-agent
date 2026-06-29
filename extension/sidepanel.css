@@ -31,6 +31,20 @@ h1 { font-size: 14px; margin: 0; }
   color: #e3b341;
   border-bottom: 1px solid var(--border);
 }
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #16331f;
+  color: #7ee2a8;
+  border-bottom: 1px solid var(--border);
+}
+.update-bar button { padding: 3px 10px; font-size: 12px; }
+.update-bar #btn-update-bridge { background: #1a7f37; }
+.update-bar a { color: #4fc1ff; margin-left: auto; }
 .setup-hint {
   margin-top: 8px;
   padding: 8px 10px;

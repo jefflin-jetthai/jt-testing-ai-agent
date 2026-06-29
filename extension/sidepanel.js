@@ -118,6 +118,69 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.atRepoPath) syncAtRepo();
 });
 
+// ── 線上更新偵測（GitHub Releases）───────────────────────────────────────────
+// 每次發版在此 repo 建一個 Release，附上 bundle.cjs 與 zip 兩個 asset 即可被偵測。
+const UPDATE_FEED =
+  "https://api.github.com/repos/jefflin-jetthai/jt-testing-ai-agent/releases/latest";
+let updateBundleUrl = null;
+
+/** 比較版號 a vs b（回 1/0/-1）。 */
+function cmpVer(a, b) {
+  const pa = String(a).replace(/^v/, "").split(".").map(Number);
+  const pb = String(b).replace(/^v/, "").split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+/** 連線後偵測 GitHub 最新 Release，有新版就顯示更新列。 */
+async function checkUpdate() {
+  try {
+    const cur = chrome.runtime.getManifest().version;
+    const res = await fetch(UPDATE_FEED, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return; // repo 私有 / 無 release → 靜默
+    const rel = await res.json();
+    const latest = (rel.tag_name || "").replace(/^v/, "");
+    if (!latest || cmpVer(latest, cur) <= 0) return; // 已是最新
+    const assets = rel.assets || [];
+    updateBundleUrl = assets.find((a) => a.name === "bundle.cjs")?.browser_download_url || null;
+    const zip = assets.find((a) => /\.zip$/i.test(a.name));
+    $("update-msg").textContent = `🆕 有新版 v${latest}（目前 v${cur}）`;
+    $("btn-update-bridge").style.display = updateBundleUrl && bridgeConnected ? "inline-block" : "none";
+    const dl = $("update-download");
+    dl.href = zip?.browser_download_url || rel.html_url || "#";
+    dl.textContent = zip ? "下載新版 zip" : "前往 Release";
+    $("update-bar").style.display = "flex";
+  } catch {
+    /* 偵測失敗不影響使用 */
+  }
+}
+
+// 更新 bridge：請 bridge 下載新 bundle 覆蓋自己並重啟，再自動重連
+$("btn-update-bridge").addEventListener("click", async () => {
+  if (!updateBundleUrl) return;
+  const btn = $("btn-update-bridge");
+  btn.disabled = true;
+  btn.textContent = "更新中…";
+  logLine("bridge 自我更新中（下載新 bundle.cjs）…", "tool");
+  try {
+    await call("bridge.selfUpdate", { bundleUrl: updateBundleUrl }, 60000);
+  } catch {
+    /* bridge 更新後會 exit，ws 斷線屬正常 */
+  }
+  logLine("bridge 已更新，重新連線以套用新版…", "ok");
+  $("update-bar").style.display = "none";
+  setTimeout(() => connect(), 1800); // 等 bridge 退出，native host 啟動新 bundle
+});
+$("update-dismiss").addEventListener("click", () => {
+  $("update-bar").style.display = "none";
+});
+
 async function connect() {
   // 冪等：先拆掉舊連線，避免重複連線造成事件重複處理
   if (ws) {
@@ -181,6 +244,7 @@ async function connect() {
       if (cfg.antigravityModel) agentModels.antigravity = cfg.antigravityModel;
       updateModelUI(); // 依目前 agent 填入下拉並選中偵測到的 model
       refreshChromeStatus();
+      checkUpdate(); // 線上偵測新版（GitHub Releases）
     } catch (e) {
       logLine(`config 讀取失敗：${e.message}`, "err");
     }
