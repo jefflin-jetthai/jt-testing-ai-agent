@@ -124,6 +124,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 const UPDATE_FEED_DEFAULT =
   "https://api.github.com/repos/jefflin-jetthai/jt-testing-ai-agent/releases/latest";
 let updateBundleUrl = null;
+let updateZipUrl = null;
 
 /** 取更新來源：Options 設定優先，否則內建預設。 */
 function getUpdateFeed() {
@@ -158,32 +159,50 @@ async function checkUpdate() {
     const assets = rel.assets || [];
     updateBundleUrl = assets.find((a) => a.name === "bundle.cjs")?.browser_download_url || null;
     const zip = assets.find((a) => /\.zip$/i.test(a.name));
+    updateZipUrl = zip?.browser_download_url || null;
     $("update-msg").textContent = `🆕 有新版 v${latest}（目前 v${cur}）`;
     $("btn-update-bridge").style.display = updateBundleUrl && bridgeConnected ? "inline-block" : "none";
+    // 手動下載連結預設隱藏；只有自動更新 extension 失敗時才顯示
     const dl = $("update-download");
-    dl.href = zip?.browser_download_url || rel.html_url || "#";
-    dl.textContent = zip ? "下載新版 zip" : "前往 Release";
+    dl.href = updateZipUrl || rel.html_url || "#";
+    dl.style.display = "none";
     $("update-bar").style.display = "flex";
   } catch {
     /* 偵測失敗不影響使用 */
   }
 }
 
-// 更新 bridge：請 bridge 下載新 bundle 覆蓋自己並重啟，再自動重連
+// 一鍵更新：bridge 下載新 bundle（＋extension 檔）覆蓋自己 → 退出；
+// 若 extension 也更新了就自動 reload 擴充，否則重新連線。
 $("btn-update-bridge").addEventListener("click", async () => {
   if (!updateBundleUrl) return;
   const btn = $("btn-update-bridge");
   btn.disabled = true;
   btn.textContent = "更新中…";
-  logLine("bridge 自我更新中（下載新 bundle.cjs）…", "tool");
+  logLine("更新中（bridge 下載新版，含 extension）…", "tool");
+  let res = null;
   try {
-    await call("bridge.selfUpdate", { bundleUrl: updateBundleUrl }, 60000);
+    res = await call("bridge.selfUpdate", { bundleUrl: updateBundleUrl, zipUrl: updateZipUrl }, 120000);
   } catch {
-    /* bridge 更新後會 exit，ws 斷線屬正常 */
+    /* bridge 更新後會 exit，ws 斷線屬正常；res 維持 null */
   }
-  logLine("bridge 已更新，重新連線以套用新版…", "ok");
   $("update-bar").style.display = "none";
-  setTimeout(() => connect(), 1800); // 等 bridge 退出，native host 啟動新 bundle
+  if (res?.extensionUpdated) {
+    logLine("已更新 bridge 與 extension，重新載入擴充…", "ok");
+    setTimeout(() => chrome.runtime.reload(), 1000); // 從磁碟載入新 extension 檔
+  } else {
+    // bridge 已更新；extension 未自動更新（未記錄路徑/舊安裝）→ 重連並提供手動下載
+    logLine("bridge 已更新，重新連線…", "ok");
+    if (updateZipUrl) {
+      const dl = $("update-download");
+      dl.textContent = "extension 需手動更新：下載 zip";
+      dl.style.display = "";
+      $("update-msg").textContent = "bridge 已更新；extension 請手動下載並 reload";
+      $("btn-update-bridge").style.display = "none";
+      $("update-bar").style.display = "flex";
+    }
+    setTimeout(() => connect(), 1800);
+  }
 });
 $("update-dismiss").addEventListener("click", () => {
   $("update-bar").style.display = "none";

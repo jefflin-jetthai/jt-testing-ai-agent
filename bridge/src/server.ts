@@ -9,13 +9,16 @@ import {
   copyFileSync,
   createReadStream,
   existsSync,
+  mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
+import { unzipSync } from "fflate";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   artifactsDir,
@@ -48,29 +51,74 @@ export function broadcast(event: WsEvent): void {
   for (const ws of clients) send(ws, event);
 }
 
-/**
- * 下載新的 bundle.cjs 覆蓋目前執行中的 bundle（打包版自我更新）。
- * 僅打包版（process.argv[1] 指向 .cjs/.js）可用；會先備份 .bak。
- */
-async function selfUpdateBundle(
-  bundleUrl?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const target = process.env.JT_BRIDGE_SCRIPT || process.argv[1] || "";
-  if (!/\.(c?js)$/.test(target)) {
-    return { ok: false, error: "開發模式不支援自我更新（請用 git pull / 重新打包）" };
+/** 取目前 bundle 路徑（打包版）；非打包版回空字串。 */
+function bundlePath(): string {
+  const p = process.env.JT_BRIDGE_SCRIPT || process.argv[1] || "";
+  return /\.(c?js)$/.test(p) ? p : "";
+}
+
+/** 安裝時記下的 extension 資料夾路徑（bundle 同層 extension-dir.txt）；無則回空。 */
+function extensionDir(): string {
+  try {
+    const f = join(dirname(bundlePath()), "extension-dir.txt");
+    if (existsSync(f)) {
+      const dir = readFileSync(f, "utf8").trim();
+      if (dir && existsSync(join(dir, "manifest.json"))) return dir;
+    }
+  } catch {
+    /* ignore */
   }
+  return "";
+}
+
+/**
+ * 一鍵自我更新：下載新 bundle.cjs 覆蓋自身；若知道 extension 路徑且有 zipUrl，
+ * 一併解壓 zip 內的 extension/ 覆蓋該資料夾（之後由擴充 chrome.runtime.reload 套用）。
+ * 僅打包版可用；bundle 會先備份 .bak。
+ */
+async function selfUpdate(
+  bundleUrl?: string,
+  zipUrl?: string,
+): Promise<
+  { ok: true; extensionUpdated: boolean } | { ok: false; error: string }
+> {
+  const target = bundlePath();
+  if (!target) return { ok: false, error: "開發模式不支援自我更新（請用 git pull / 重新打包）" };
   if (!bundleUrl || !/^https:\/\//i.test(bundleUrl)) {
     return { ok: false, error: "無效的更新來源（需 https 網址）" };
   }
   try {
+    // 1) 更新 bundle.cjs
     const resp = await fetch(bundleUrl);
-    if (!resp.ok) return { ok: false, error: `下載失敗 HTTP ${resp.status}` };
+    if (!resp.ok) return { ok: false, error: `下載 bundle 失敗 HTTP ${resp.status}` };
     const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length < 1000) return { ok: false, error: "下載內容異常（過小）" };
-    if (existsSync(target)) copyFileSync(target, target + ".bak"); // 備份舊版可回復
+    if (buf.length < 1000) return { ok: false, error: "bundle 內容異常（過小）" };
+    if (existsSync(target)) copyFileSync(target, target + ".bak");
     writeFileSync(target, buf);
-    console.log(`[bridge] self-updated bundle (${buf.length} bytes) ← ${bundleUrl}`);
-    return { ok: true };
+    console.log(`[bridge] self-updated bundle (${buf.length} bytes)`);
+
+    // 2) 若知道 extension 路徑 + 有 zip，解壓覆蓋 extension/
+    let extensionUpdated = false;
+    const extDir = extensionDir();
+    if (extDir && zipUrl && /^https:\/\//i.test(zipUrl)) {
+      const zr = await fetch(zipUrl);
+      if (zr.ok) {
+        const files = unzipSync(new Uint8Array(await zr.arrayBuffer()));
+        let n = 0;
+        for (const [name, data] of Object.entries(files)) {
+          // 取 zip 內 ".../extension/<rel>" 的檔，寫到 extDir/<rel>
+          const m = name.match(/(?:^|\/)extension\/(.+)$/);
+          if (!m || name.endsWith("/")) continue;
+          const dest = join(extDir, m[1]);
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, Buffer.from(data));
+          n++;
+        }
+        extensionUpdated = n > 0;
+        console.log(`[bridge] self-updated extension: ${n} files → ${extDir}`);
+      }
+    }
+    return { ok: true, extensionUpdated };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -121,12 +169,12 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
         return { ...base, result: { stopping: true } };
 
       case "bridge.selfUpdate": {
-        // 下載新的 bundle.cjs 覆蓋自身，再結束程序 → native host 下次連線會啟動新 bundle
-        const { bundleUrl } = (req.payload as { bundleUrl?: string }) ?? {};
-        const out = await selfUpdateBundle(bundleUrl);
-        if (out.ok) setTimeout(() => process.exit(0), 250); // 退出讓 native host 以新 bundle 重啟
+        // 下載新 bundle.cjs（＋可選 extension）覆蓋自身，再結束 → native host 下次連線啟動新 bundle
+        const { bundleUrl, zipUrl } = (req.payload as { bundleUrl?: string; zipUrl?: string }) ?? {};
+        const out = await selfUpdate(bundleUrl, zipUrl);
+        if (out.ok) setTimeout(() => process.exit(0), 300); // 退出讓 native host 以新 bundle 重啟
         return out.ok
-          ? { ...base, result: { updated: true, restarting: true } }
+          ? { ...base, result: { updated: true, restarting: true, extensionUpdated: out.extensionUpdated } }
           : { id: req.id, ok: false, error: out.error };
       }
 

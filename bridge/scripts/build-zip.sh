@@ -54,6 +54,8 @@ mkdir -p "\$DEST"
 cp "\$DIR/bundle.cjs" "\$DEST/bundle.cjs"
 # AI 測試規範（與 bundle 同層 agents/，供 attach 模式讀取；可日後編輯）
 rm -rf "\$DEST/agents"; [ -d "\$DIR/agents" ] && cp -R "\$DIR/agents" "\$DEST/agents"
+# 記下 extension 資料夾路徑，供「一鍵更新」時 bridge 覆蓋 extension 檔後自我 reload
+printf '%s' "\$DIR/extension" > "\$DEST/extension-dir.txt"
 
 # launcher（裝在非保護目錄）：用系統 node 跑 bundle（--native-host 模式）
 cat > "\$DEST/launcher.sh" <<L
