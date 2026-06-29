@@ -33,9 +33,7 @@ function readBridgeConfig(): Record<string, string> {
   }
 }
 
-const FILE_CONFIG = readBridgeConfig();
-
-/** 合併寫入本地設定檔（UI 設定用）。下次啟動 bridge 生效。 */
+/** 合併寫入本地設定檔（UI 設定用）。AT 路徑等為動態讀取，存檔後即時生效。 */
 export function saveBridgeConfig(patch: Record<string, string>): void {
   const merged = { ...readBridgeConfig(), ...patch };
   mkdirSync(DATA_DIR, { recursive: true });
@@ -43,13 +41,23 @@ export function saveBridgeConfig(patch: Record<string, string>): void {
 }
 
 /**
- * automatic-testing 本地 clone 路徑。
- * 優先序：環境變數 > UI 設定檔 > 預設。
+ * automatic-testing 本地 clone 路徑。**每次即時讀取設定檔**（改設定後免重啟 bridge 即生效）。
+ * 優先序：環境變數 > UI 設定檔 > 空（未設定）。
  */
-export const AT_REPO_PATH =
-  process.env.AT_REPO_PATH ??
-  FILE_CONFIG.AT_REPO_PATH ??
-  "/Users/jefflin/gitProject/automatic-testing";
+export function atRepoPath(): string {
+  return process.env.AT_REPO_PATH ?? readBridgeConfig().AT_REPO_PATH ?? "";
+}
+
+/** 是否已設定且存在可用的 AT repo（決定要不要顯示/允許匯出 pytest）。 */
+export function atRepoConfigured(): boolean {
+  const p = atRepoPath();
+  return Boolean(p) && existsSync(p);
+}
+
+/** agent 執行的 cwd：有 AT repo 用它（套用其 CLAUDE.md / .env）；沒有就用家目錄。 */
+export function agentCwd(): string {
+  return atRepoPath() || homedir();
+}
 
 /** Bridge WebSocket / HTTP 監聽 port。 */
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 8787);
@@ -64,6 +72,23 @@ export const CDP_BROWSER_URL =
 
 /** agent 預設 model（claude）。 */
 export const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? "claude-opus-4-8";
+
+/** 從 ~/.codex/config.toml 讀 model（codex 未指定 -m 時即用此）。 */
+function readCodexModel(): string | undefined {
+  try {
+    const p = resolve(homedir(), ".codex", "config.toml");
+    if (!existsSync(p)) return undefined;
+    return readFileSync(p, "utf8").match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/** codex model：env > ~/.codex/config.toml > 顯示用佔位字串。 */
+export const CODEX_MODEL = process.env.CODEX_MODEL ?? readCodexModel() ?? "(codex 預設)";
+
+/** antigravity model：adapter 不吃 model 參數，僅供顯示；可用 env 指定。 */
+export const ANTIGRAVITY_MODEL = process.env.ANTIGRAVITY_MODEL ?? "(CLI 預設)";
 
 /** 測試用 Chrome 執行檔（可用環境變數覆寫）。 */
 export const CHROME_BINARY =
@@ -85,16 +110,21 @@ export const CDP_PORT = Number(new URL(CDP_BROWSER_URL).port || 9222);
 /** 預設 agent runtime。 */
 export const DEFAULT_AGENT = process.env.DEFAULT_AGENT ?? "claude";
 
-/** 產出物（gif / markdown / 暫存 frames）根目錄。 */
-export const ARTIFACTS_DIR =
-  process.env.ARTIFACTS_DIR ?? resolve(AT_REPO_PATH, "reports", "ai-agent");
+/** 產出物（gif / markdown / 暫存 frames）根目錄。隨 AT repo 設定即時變動。 */
+export function artifactsDir(): string {
+  if (process.env.ARTIFACTS_DIR) return process.env.ARTIFACTS_DIR;
+  const p = atRepoPath();
+  return p ? resolve(p, "reports", "ai-agent") : resolve(DATA_DIR, "reports", "ai-agent");
+}
 
 /**
  * 把 AT repo 的 .env 載進 process.env（不覆寫已存在的值）。
  * 這樣 bridge 與既有框架共用同一份金鑰設定。
  */
 export function loadAtEnv(): void {
-  const envPath = resolve(AT_REPO_PATH, ".env");
+  const p = atRepoPath();
+  if (!p) return; // 未設定 AT repo → 無 .env 可載
+  const envPath = resolve(p, ".env");
   if (existsSync(envPath)) {
     loadDotenv({ path: envPath });
   }
@@ -102,23 +132,30 @@ export function loadAtEnv(): void {
 
 /** 啟動時的健康檢查，回傳人類可讀的狀態。 */
 export function describeConfig(): Record<string, unknown> {
-  const envPath = resolve(AT_REPO_PATH, ".env");
+  const p = atRepoPath();
+  const envPath = p ? resolve(p, ".env") : "";
   return {
-    atRepoPath: AT_REPO_PATH,
-    atRepoExists: existsSync(AT_REPO_PATH),
-    atEnvExists: existsSync(envPath),
+    atRepoPath: p,
+    atRepoExists: Boolean(p) && existsSync(p),
+    atRepoConfigured: atRepoConfigured(),
+    atEnvExists: Boolean(envPath) && existsSync(envPath),
     notionKeyConfigured: Boolean(process.env.NOTION_API_KEY),
     anthropicKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
     bridgePort: BRIDGE_PORT,
     cdpBrowserUrl: CDP_BROWSER_URL,
     defaultAgent: DEFAULT_AGENT,
-    artifactsDir: ARTIFACTS_DIR,
+    claudeModel: CLAUDE_MODEL,
+    codexModel: CODEX_MODEL,
+    antigravityModel: ANTIGRAVITY_MODEL,
+    artifactsDir: artifactsDir(),
   };
 }
 
 /** 讀取 AT repo 的 mcp.json（chrome-devtools / notion 等設定），供 agent adapter 重用。 */
 export function readAtMcpConfig(): unknown | null {
-  const p = resolve(AT_REPO_PATH, ".vscode", "mcp.json");
+  const repo = atRepoPath();
+  if (!repo) return null;
+  const p = resolve(repo, ".vscode", "mcp.json");
   if (!existsSync(p)) return null;
   try {
     return JSON.parse(readFileSync(p, "utf8"));

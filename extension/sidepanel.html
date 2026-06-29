@@ -37,8 +37,12 @@
     <section class="panel">
       <div class="row">
         <label for="page-id">Notion 頁面</label>
-        <input id="page-id" type="text" placeholder="貼上 Notion 頁面網址或 32 碼 ID" />
+        <div class="input-wrap">
+          <input id="page-id" type="text" placeholder="貼上 Notion 頁面網址或 32 碼 ID" />
+          <button id="btn-paste" type="button" title="貼上剪貼簿內容">📋</button>
+        </div>
         <button id="btn-load">讀取案例</button>
+        <button id="btn-reread" style="background: #3a3a3a" disabled title="清除快取、重新讀取 Notion 最新內容">重讀</button>
         <button id="btn-reset" style="background: #3a3a3a" disabled>重置</button>
       </div>
       <div class="row" id="cases-toolbar" style="display: none; margin-top: 8px">
@@ -57,6 +61,12 @@
           <option value="codex" disabled>Codex</option>
           <option value="antigravity" disabled>Antigravity</option>
         </select>
+        <select id="model-select" title="選擇 Claude model（本次測試用）">
+          <option value="claude-opus-4-8">Opus 4.8</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+          <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+        </select>
+        <span id="model-label" class="meta" title="目前使用的 AI model"></span>
       </div>
       <div class="row" style="margin-top: 8px; flex-wrap: wrap">
         <label for="mode-select">模式</label>
@@ -79,7 +89,7 @@
       <div id="log" class="log"></div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="export-section" style="display: none">
       <div class="small muted" style="margin-bottom: 8px">匯出 pytest 到本地 automatic-testing 專案</div>
       <div class="row">
         <label for="export-product">Product</label>

@@ -2,9 +2,9 @@
  * Git 操作（在 AT repo 內）。建立本地 commit，**不自動 push**；push 為獨立明確動作。
  */
 import { spawn } from "node:child_process";
-import { AT_REPO_PATH } from "./config.js";
+import { atRepoPath } from "./config.js";
 
-function git(args: string[], cwd = AT_REPO_PATH): Promise<{ code: number; stdout: string; stderr: string }> {
+function git(args: string[], cwd = atRepoPath()): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const p = spawn("git", args, { cwd });
     let stdout = "";
@@ -16,13 +16,13 @@ function git(args: string[], cwd = AT_REPO_PATH): Promise<{ code: number; stdout
   });
 }
 
-export async function currentBranch(cwd = AT_REPO_PATH): Promise<string> {
+export async function currentBranch(cwd = atRepoPath()): Promise<string> {
   const r = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   return r.stdout.trim();
 }
 
 /** porcelain 狀態（限定 tests/ 與 specs/ 路徑，避免動到無關檔案）。 */
-export async function changedTestFiles(cwd = AT_REPO_PATH): Promise<string[]> {
+export async function changedTestFiles(cwd = atRepoPath()): Promise<string[]> {
   const r = await git(
     ["status", "--porcelain", "--untracked-files=all", "--", "tests/", "specs/"],
     cwd,
@@ -34,7 +34,7 @@ export async function changedTestFiles(cwd = AT_REPO_PATH): Promise<string[]> {
 }
 
 /** 列出 tests/ 與 specs/ 下「未被 git 追蹤」的新檔（中止匯出時用來清除本次產出）。 */
-export async function listUntrackedTestFiles(cwd = AT_REPO_PATH): Promise<string[]> {
+export async function listUntrackedTestFiles(cwd = atRepoPath()): Promise<string[]> {
   const r = await git(
     ["status", "--porcelain", "--untracked-files=all", "--", "tests/", "specs/"],
     cwd,
@@ -46,7 +46,7 @@ export async function listUntrackedTestFiles(cwd = AT_REPO_PATH): Promise<string
     .filter(Boolean);
 }
 
-export async function diff(files: string[], cwd = AT_REPO_PATH): Promise<string> {
+export async function diff(files: string[], cwd = atRepoPath()): Promise<string> {
   const r = await git(["diff", "--", ...files], cwd);
   return r.stdout;
 }
@@ -62,7 +62,7 @@ export interface CommitArgs {
 export async function createCommit(
   args: CommitArgs,
 ): Promise<{ ok: boolean; branch: string; hash?: string; error?: string }> {
-  const cwd = args.cwd ?? AT_REPO_PATH;
+  const cwd = args.cwd ?? atRepoPath();
   if (!args.files.length) return { ok: false, branch: await currentBranch(cwd), error: "沒有要提交的檔案" };
 
   if (args.branch) {
@@ -88,7 +88,7 @@ export async function createCommit(
 /** 明確 push（使用者於 UI 觸發）。 */
 export async function push(
   branch?: string,
-  cwd = AT_REPO_PATH,
+  cwd = atRepoPath(),
 ): Promise<{ ok: boolean; output: string }> {
   const b = branch ?? (await currentBranch(cwd));
   const r = await git(["push", "-u", "origin", b], cwd);

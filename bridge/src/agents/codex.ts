@@ -205,6 +205,7 @@ export class CodexAdapter implements AgentAdapter {
         stdio: ["ignore", "pipe", "pipe"],
       });
       let finalText = "";
+      let errorText = ""; // 失敗訊息（如額度用盡）；finalText 為空時帶出供報告/診斷
       let sawFailure = false;
       let settled = false;
       let childExited = false;
@@ -222,7 +223,7 @@ export class CodexAdapter implements AgentAdapter {
       const scheduleFinish = (delayMs: number) => {
         if (finishTimer || settled) return;
         finishTimer = setTimeout(
-          () => finish({ ok: !sawFailure, finalText }),
+          () => finish({ ok: !sawFailure, finalText: finalText || errorText }),
           delayMs,
         );
       };
@@ -240,7 +241,10 @@ export class CodexAdapter implements AgentAdapter {
         const out = summarizeEvent(evt);
         if (!out) return;
         if (out.kind === "result") finalText = out.text;
-        if (out.kind === "stderr") sawFailure = true;
+        if (out.kind === "stderr") {
+          sawFailure = true;
+          if (!errorText) errorText = out.text; // 第一個錯誤訊息（如 usage limit）
+        }
         opts.onEvent({ kind: out.kind, text: out.kind === "tool" ? `🔧 ${out.text}` : out.text, raw: evt });
         if (hasEventType(evt, ["turn.completed"])) scheduleFinish(1500);
         if (hasEventType(evt, ["turn.failed", "error"])) scheduleFinish(100);
@@ -258,7 +262,7 @@ export class CodexAdapter implements AgentAdapter {
       });
       child.on("close", (code) => {
         childExited = true;
-        finish({ ok: code === 0 && !sawFailure, finalText });
+        finish({ ok: code === 0 && !sawFailure, finalText: finalText || errorText });
       });
     });
   }

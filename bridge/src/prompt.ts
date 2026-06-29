@@ -2,6 +2,9 @@
  * 把一個 Notion TestCase 組成 agent 的執行 prompt 與 system prompt。
  * agent 以 chrome-devtools-mcp 驅動「使用者當前分頁」逐步執行並驗證。
  */
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { TestCase } from "./protocol.js";
 
 /** system prompt：定位 agent 角色 + 重用 AT CLAUDE.md 的關鍵規範摘要。 */
@@ -14,14 +17,95 @@ export const SYSTEM_PROMPT = [
   "只做測試案例描述的操作，不要進行破壞性或與測試無關的動作。",
 ].join("\n");
 
-/** attach 模式：使用自建 jt-browser 工具（繞開 puppeteer）。 */
-export const ATTACH_SYSTEM_PROMPT = [
-  "你是一個 E2E 測試執行 agent，透過 jt-browser MCP 工具操作『使用者目前的 Chrome 分頁』（已由 extension 接管）。",
-  "可用工具：snapshot（讀頁面+互動元素ref）、navigate、click（用 ref 或 text）、fill（ref+value）、wait_for（等文字）、evaluate（執行JS驗證）。",
-  "流程：先 snapshot 了解頁面 → 依測試步驟用 click/fill/navigate 操作 →（必要時 wait_for）→ 用 evaluate/snapshot 驗證『確認項目』。",
-  "目標網站多為 Vue SPA：操作後常需 wait_for 等待結果出現再驗證。",
-  "只做測試案例描述的操作，不要破壞性動作。",
-].join("\n");
+/**
+ * attach 模式「專業測試執行工程師規範」（內建預設）。
+ * 此為品質一致的基準；可由 AT repo 的 .github/agents/qa-test-executor.agent.md 覆寫（見 attachSystemPrompt）。
+ */
+export const ATTACH_SYSTEM_PROMPT_DEFAULT = `你是一位資深 E2E 測試執行工程師（QA Engineer），透過 jt-browser MCP 工具操作「使用者目前的 Chrome 分頁」（已由 extension 接管），執行 Notion 測試案例。
+你的最高原則是「品質一致」：相同案例每次都依相同標準與流程執行，產出可重現、有憑證的結果。
+
+# 可用工具
+- snapshot：讀取頁面（URL、標題、互動元素 ref 清單、可見文字）。每次操作前先用它了解頁面。
+- navigate：導向網址並等待載入。
+- click：點擊元素（用 snapshot 的 ref，或元素文字 text）。
+- fill：在輸入框填值（ref + value）。
+- wait_for：等待頁面出現指定文字。
+- evaluate：執行 JS 取得實際數值/狀態（驗證用）。
+- set_viewport：設定 viewport 尺寸做響應式/RWD 測試（桌機 width=1200；手機 width=390, mobile=true）。
+
+# 鐵則（必須遵守）
+1. 接管當前分頁，不開新分頁、不離開受測網站（除非測試步驟明確要求 navigate）。
+2. 只執行測試案例描述的操作。嚴禁破壞性/不可逆動作：送出付款、刪除資料、變更帳號或系統設定、送出無法復原的表單等——即使頁面允許也不做。
+3. 每個確認項目都必須以「實際觀察到的憑證」判定（evaluate 取得的數值/文字，或 snapshot 看到的內容）。沒有憑證不得判 PASS。
+4. 無法驗證時誠實標記（FAIL，並於說明寫明原因），絕不臆測、絕不編造數值或結果。
+5. 被前置條件擋住（未登入、無權限、找不到元素）時，明確回報卡在哪、缺什麼，不要假裝完成。
+
+# 標準執行流程（每個案例固定照做）
+1. snapshot 確認目前在正確的受測頁面/分頁。
+2. 檢查前置條件是否滿足；不滿足則如實回報並結束該案例。
+3. 依「測試步驟」逐步操作，每步用語意化描述說明你做了什麼。
+4. 受測站多為 Vue.js SPA，畫面非同步更新：驗證前務必 wait_for 對應文字或重新 snapshot，不要對尚未渲染/更新的內容下判斷。
+5. 逐條驗證「確認項目」，每條記錄「實際觀察」（具體數值、文字、可見狀態）。
+
+# 定位策略
+- 選擇器優先序：data-testid > name > placeholder > 文字語意 > type > class。
+- 禁用 nth-child / 絕對位置選擇器。
+- 找不到元素時先重新 snapshot 取得最新 ref，不要硬猜。
+
+# 量測型驗證
+- 需要精確數值（寬度、數量、樣式、文字）時，用 evaluate 取 computed 值（getComputedStyle / getBoundingClientRect / querySelectorAll().length 等），不可肉眼估計。
+- 對照規格時明確寫出「預期 vs 實際」。
+
+# 輸出與判定
+- CHECKS 每條格式固定：「- <確認項目>: PASS/FAIL/WARN - <實際觀察/憑證>」。
+- 整體 STATUS 三選一：
+  - PASS：所有確認項目皆符合。
+  - FAIL：**實際觀察到不符合規格／確認項目明確失敗**（明確的異常才用 FAIL）。
+  - WARN：因『前置條件』無法滿足（未登入、無權限、找不到受測頁面/元素、缺資料）而**無法執行驗證**——不要判 FAIL，改用 WARN，並在 SUMMARY 寫明卡在哪、缺什麼。`;
+
+/** 規範檔名（隨工具散佈在 jt-testing-ai-agent 內，使用者可編輯覆寫內建預設）。 */
+const EXECUTOR_SPEC_FILE = "qa-test-executor.agent.md";
+
+/** 去掉 markdown 開頭的 YAML frontmatter（--- ... ---）。 */
+function stripFrontmatter(md: string): string {
+  const m = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return (m ? md.slice(m[0].length) : md).trim();
+}
+
+/** 規範檔可能的位置：環境變數 > 打包版（bundle.cjs 同層 agents/）> 開發版（bridge/agents/）。 */
+function specCandidatePaths(): string[] {
+  const paths: string[] = [];
+  if (process.env.JT_EXECUTOR_SPEC) paths.push(process.env.JT_EXECUTOR_SPEC);
+  // 打包版：bundle.cjs 由 node 啟動，process.argv[1] 即其路徑，規範檔放同層 agents/
+  const script = process.argv[1];
+  if (script) paths.push(resolve(dirname(script), "agents", EXECUTOR_SPEC_FILE));
+  // 開發版：bridge/src/prompt.ts → bridge/agents/qa-test-executor.agent.md
+  try {
+    paths.push(resolve(fileURLToPath(import.meta.url), "..", "..", "agents", EXECUTOR_SPEC_FILE));
+  } catch {
+    /* 打包版 import.meta.url 為假值，忽略 */
+  }
+  return paths;
+}
+
+/**
+ * attach 模式 system prompt（專業測試執行工程師規範）：
+ * 優先讀 jt-testing-ai-agent 內的 qa-test-executor.agent.md（去掉 frontmatter），
+ * 找不到才用內建預設 ATTACH_SYSTEM_PROMPT_DEFAULT。每次 run 讀取，編輯後立即生效。
+ */
+export function attachSystemPrompt(): string {
+  for (const p of specCandidatePaths()) {
+    try {
+      if (existsSync(p)) {
+        const body = stripFrontmatter(readFileSync(p, "utf8"));
+        if (body) return body;
+      }
+    } catch {
+      /* 試下一個候選路徑 */
+    }
+  }
+  return ATTACH_SYSTEM_PROMPT_DEFAULT;
+}
 
 /** 單一 TC 的執行指令。要求結尾輸出機器可解析的 VERDICT 區塊。 */
 export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: string }): string {
@@ -45,12 +129,17 @@ export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: st
       "4. 最後輸出下列固定格式（供程式解析）：",
       "",
       "```verdict",
-      "STATUS: PASS 或 FAIL",
+      "STATUS: PASS / FAIL / WARN",
       "SUMMARY: 一句話總結",
       "CHECKS:",
-      "- <確認項目1>: PASS/FAIL - 實際觀察",
-      "- <確認項目2>: PASS/FAIL - 實際觀察",
+      "- <確認項目1>: PASS/FAIL/WARN - 實際觀察",
+      "- <確認項目2>: PASS/FAIL/WARN - 實際觀察",
       "```",
+      "",
+      "STATUS 判定原則：",
+      "- 因『前置條件』無法滿足（未登入、無權限、找不到受測頁面/元素、缺資料）而無法執行驗證 → 用 WARN，並在 SUMMARY 寫明卡在哪、缺什麼。",
+      "- 只有實際觀察到『不符合規格／確認項目明確失敗』才用 FAIL。",
+      "- 所有確認項目皆符合 → PASS。",
     ].join("\n"),
   );
   return lines.join("\n");
@@ -58,24 +147,24 @@ export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: st
 
 /** 從 agent 最終輸出解析 verdict。找不到 verdict 區塊時保守判為 error。 */
 export function parseVerdict(finalText: string): {
-  status: "pass" | "fail" | "error";
+  status: "pass" | "fail" | "warn" | "error";
   summary: string;
 } {
   const block = finalText.match(/```verdict([\s\S]*?)```/i)?.[1] ?? finalText;
-  const statusM = block.match(/STATUS:\s*(PASS|FAIL)/i);
+  // WARN/BLOCKED/SKIP = 前置造成無法測試（非失敗）
+  const statusM = block.match(/STATUS:\s*(PASS|FAIL|WARN|BLOCKED|SKIP(?:PED)?)/i);
   const summaryM = block.match(/SUMMARY:\s*(.+)/i);
   if (!statusM) {
     // 沒有 verdict：常見是 agent 本身的錯誤（額度/認證等），直接把原文帶出來方便診斷
     const raw = (finalText || "").trim();
-    if (/session limit|usage limit|rate limit|quota/i.test(raw))
+    if (/session limit|usage limit|rate limit|limit reached|quota|credit|insufficient|額度|用量|上限/i.test(raw))
       return { status: "error", summary: `Agent 額度/限制：${raw.slice(0, 160)}` };
     return {
       status: "error",
       summary: summaryM?.[1]?.trim() || raw.slice(0, 200) || "無法解析測試結果（agent 無輸出）",
     };
   }
-  return {
-    status: statusM[1].toUpperCase() === "PASS" ? "pass" : "fail",
-    summary: summaryM?.[1]?.trim() ?? "",
-  };
+  const s = statusM[1].toUpperCase();
+  const status = s === "PASS" ? "pass" : s.startsWith("WARN") || s.startsWith("BLOCK") || s.startsWith("SKIP") ? "warn" : "fail";
+  return { status, summary: summaryM?.[1]?.trim() ?? "" };
 }

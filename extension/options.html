@@ -64,14 +64,14 @@
       </div>
 
       <div class="field">
-        <label for="at-repo-path">automatic-testing 專案路徑</label>
+        <label for="at-repo-path">automatic-testing 專案路徑（選填）</label>
         <div class="input-row">
-          <input id="at-repo-path" type="text" placeholder="例如 /Users/you/gitProject/automatic-testing" />
+          <input id="at-repo-path" type="text" placeholder="選填；填了才會出現「匯出 pytest」" />
           <button id="pick-at-repo" style="background: #3a3a3a; white-space: nowrap">選取…</button>
         </div>
         <div class="hint">
-          bridge 會用此路徑跑 pytest / 套用測試規範。儲存後於連線時送給 bridge，
-          需按 side panel「停止 bridge」再「連線」套用。留空則用 bridge 預設。
+          <b>選填</b>：只有「匯出 pytest」需要此路徑。<b>留空也能正常讀 Notion、執行測試</b>，只是側欄不顯示匯出區。
+          儲存後需按 side panel「停止 bridge」再「連線」套用。
         </div>
       </div>
 

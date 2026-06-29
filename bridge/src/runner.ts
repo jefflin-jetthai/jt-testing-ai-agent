@@ -8,10 +8,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ARTIFACTS_DIR,
-  AT_REPO_PATH,
+  agentCwd,
+  artifactsDir,
   CDP_BROWSER_URL,
   CLAUDE_MODEL,
+  CODEX_MODEL,
   DEFAULT_AGENT,
 } from "./config.js";
 import { getAgent } from "./agents/index.js";
@@ -23,7 +24,7 @@ import {
   writeMcpConfig,
 } from "./mcp.js";
 import { isRelayConnected } from "./attach.js";
-import { ATTACH_SYSTEM_PROMPT, SYSTEM_PROMPT, buildRunPrompt, parseVerdict } from "./prompt.js";
+import { attachSystemPrompt, SYSTEM_PROMPT, buildRunPrompt, parseVerdict } from "./prompt.js";
 import { StepRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
 import { writeMarkdown } from "./report.js";
 import { BRIDGE_PORT } from "./config.js";
@@ -123,17 +124,32 @@ export async function startRun(
     try {
       const mcpConfigPath = mode === "attach" ? writeBrowserMcpConfig() : writeMcpConfig(CDP_BROWSER_URL);
       const allowedTools = mode === "attach" ? JT_BROWSER_TOOLS : CHROME_DEVTOOLS_TOOLS;
-      const systemPrompt = mode === "attach" ? ATTACH_SYSTEM_PROMPT : SYSTEM_PROMPT;
+      const systemPrompt = mode === "attach" ? attachSystemPrompt() : SYSTEM_PROMPT;
 
+      // claude 由 bridge 指定 model；codex/antigravity 用各自 CLI 的預設 model
+      // claude / codex 可由 UI 下拉指定 model（payload.model）；codex 未指定用 config.toml；antigravity 用 CLI 預設
+      const resolvedModel =
+        agentName === "claude"
+          ? payload.model || CLAUDE_MODEL
+          : agentName === "codex"
+            ? payload.model || (CODEX_MODEL.startsWith("(") ? undefined : CODEX_MODEL)
+            : undefined;
+      const modelLabel =
+        agentName === "claude"
+          ? payload.model || CLAUDE_MODEL
+          : agentName === "codex"
+            ? payload.model || CODEX_MODEL
+            : "(CLI 預設)";
       log({
         kind: "system",
         text:
-          mode === "attach"
-            ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。agent=${agentName}`
-            : `Chrome 已連線：${probe.version}（${probe.pages?.length ?? 0} 個分頁）。agent=${agentName}`,
+          (mode === "attach"
+            ? `接管當前分頁就緒（jt-browser 工具，繞開 puppeteer）。`
+            : `Chrome 已連線：${probe.version}（${probe.pages?.length ?? 0} 個分頁）。`) +
+          `agent=${agentName} · model=${modelLabel}`,
       });
 
-      const runDir = join(ARTIFACTS_DIR, runId);
+      const runDir = join(artifactsDir(), runId);
       mkdirSync(runDir, { recursive: true });
 
       for (const tc of payload.cases) {
@@ -188,10 +204,10 @@ export async function startRun(
           const res = await agent.run({
             prompt,
             systemPrompt,
-            cwd: AT_REPO_PATH,
+            cwd: agentCwd(),
             mcpConfigPath,
             allowedTools,
-            model: agentName === "claude" ? CLAUDE_MODEL : undefined,
+            model: resolvedModel,
             signal: ctrl.signal,
             onEvent: (e) => log({ tcId: tc.tcId, kind: e.kind, text: e.text }),
           });

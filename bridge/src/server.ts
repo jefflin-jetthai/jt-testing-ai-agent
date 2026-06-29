@@ -9,8 +9,9 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
-  ARTIFACTS_DIR,
-  AT_REPO_PATH,
+  artifactsDir,
+  atRepoConfigured,
+  atRepoPath,
   BRIDGE_PORT,
   describeConfig,
   loadAtEnv,
@@ -56,17 +57,19 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
         };
 
       case "config.setAtRepo": {
-        const { path } = (req.payload as { path?: string }) ?? {};
-        if (!path) return { id: req.id, ok: false, error: "缺少 path" };
-        const exists = existsSync(path);
+        const raw = (req.payload as { path?: string })?.path;
+        const path = (raw ?? "").trim(); // 允許空字串＝清除設定（AT repo 為選填）
+        const exists = path ? existsSync(path) : false;
         saveBridgeConfig({ AT_REPO_PATH: path });
+        // 動態讀取：存檔後即時生效；只有環境變數覆寫時才需重啟
         return {
           ...base,
           result: {
             saved: true,
             path,
             exists,
-            needsRestart: path !== AT_REPO_PATH,
+            configured: atRepoConfigured(),
+            needsRestart: path !== atRepoPath(),
           },
         };
       }
@@ -103,7 +106,7 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
       }
 
       case "export.toPytest": {
-        const p = req.payload as { cases: TestCase[]; product?: string; agent?: string };
+        const p = req.payload as { cases: TestCase[]; product?: string; agent?: string; model?: string };
         if (!p?.cases?.length) return { id: req.id, ok: false, error: "沒有要匯出的測試案例" };
         const out = await exportToPytest(p, broadcast);
         return { ...base, result: out };
@@ -194,7 +197,7 @@ const http = createServer((req, res) => {
       res.end("forbidden");
       return;
     }
-    const file = join(ARTIFACTS_DIR, rel);
+    const file = join(artifactsDir(), rel);
     if (!existsSync(file)) {
       res.writeHead(404);
       res.end("not found");

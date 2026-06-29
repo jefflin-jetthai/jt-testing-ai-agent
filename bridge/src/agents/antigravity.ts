@@ -92,6 +92,7 @@ export class AntigravityAdapter implements AgentAdapter {
         stdio: ["ignore", "pipe", "pipe"],
       });
       let finalText = "";
+      let errorText = ""; // 失敗訊息（額度/認證等）；finalText 為空時帶出供報告/診斷
 
       const rl = createInterface({ input: child.stdout! });
       rl.on("line", (line) => {
@@ -110,13 +111,17 @@ export class AntigravityAdapter implements AgentAdapter {
         }
       });
 
-      child.stderr.on("data", (d) => opts.onEvent({ kind: "stderr", text: d.toString().trim() }));
+      child.stderr.on("data", (d) => {
+        const text = d.toString().trim();
+        if (text) errorText = text; // 保留最後一段 stderr（通常即終止錯誤）
+        opts.onEvent({ kind: "stderr", text });
+      });
       opts.signal?.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
       child.on("error", (err) => {
         opts.onEvent({ kind: "stderr", text: `spawn error: ${err.message}` });
         resolve({ ok: false, finalText: err.message });
       });
-      child.on("close", (code) => resolve({ ok: code === 0, finalText }));
+      child.on("close", (code) => resolve({ ok: code === 0, finalText: finalText || errorText }));
     });
   }
 }

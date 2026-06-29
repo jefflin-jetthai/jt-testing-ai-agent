@@ -33,6 +33,7 @@ export type EventType =
 export interface RunStartPayload {
   cases: TestCase[];
   agent?: string; // "claude" | "codex" | "antigravity"（預設 claude）
+  model?: string; // 指定 model（目前供 claude 下拉選擇；未指定用 bridge 預設）
   /** "remote"=另開 remote-debugging Chrome（預設、穩定）；"attach"=接管當前分頁(chrome.debugger，實驗) */
   mode?: "remote" | "attach";
   target?: { url?: string; title?: string; tabId?: number };
@@ -50,7 +51,7 @@ export interface AgentLogPayload {
 export interface RunResultPayload {
   runId: string;
   tcId: string;
-  status: "pass" | "fail" | "error";
+  status: "pass" | "fail" | "warn" | "error";
   summary: string;
   markdown?: string; // Notion 友善 markdown 全文（供複製 / 寫回）
   markdownPath?: string; // 本地檔路徑

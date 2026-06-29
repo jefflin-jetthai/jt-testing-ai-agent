@@ -11,7 +11,8 @@
     "storage",
     "debugger",
     "scripting",
-    "nativeMessaging"
+    "nativeMessaging",
+    "clipboardRead"
   ],
   "host_permissions": [
     "<all_urls>"

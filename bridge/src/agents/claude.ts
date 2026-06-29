@@ -97,6 +97,7 @@ export class ClaudeAdapter implements AgentAdapter {
       });
 
       let finalText = "";
+      let errorText = ""; // 失敗訊息（額度/認證等）；finalText 為空時帶出供報告/診斷
       let ok = false;
       let settled = false;
       let childExited = false;
@@ -113,7 +114,7 @@ export class ClaudeAdapter implements AgentAdapter {
       };
       const scheduleFinish = () => {
         if (finishTimer || settled) return;
-        finishTimer = setTimeout(() => finish({ ok, finalText }), 1500);
+        finishTimer = setTimeout(() => finish({ ok, finalText: finalText || errorText }), 1500);
       };
 
       rl.on("line", (line) => {
@@ -135,9 +136,11 @@ export class ClaudeAdapter implements AgentAdapter {
         opts.onEvent({ kind: out.kind, text: out.text, raw: evt });
       });
 
-      child.stderr.on("data", (d) =>
-        opts.onEvent({ kind: "stderr", text: d.toString().trim() }),
-      );
+      child.stderr.on("data", (d) => {
+        const text = d.toString().trim();
+        if (text) errorText = text; // 保留最後一段 stderr（通常即終止錯誤）
+        opts.onEvent({ kind: "stderr", text });
+      });
 
       if (opts.signal) {
         opts.signal.addEventListener("abort", () => child.kill("SIGTERM"), {
@@ -151,7 +154,7 @@ export class ClaudeAdapter implements AgentAdapter {
       });
       child.on("close", () => {
         childExited = true;
-        finish({ ok, finalText });
+        finish({ ok, finalText: finalText || errorText });
       });
     });
   }

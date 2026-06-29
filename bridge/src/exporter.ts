@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { AT_REPO_PATH, CLAUDE_MODEL, DEFAULT_AGENT } from "./config.js";
+import { atRepoPath, CLAUDE_MODEL, CODEX_MODEL, DEFAULT_AGENT } from "./config.js";
 import { getAgent } from "./agents/index.js";
 import { changedTestFiles, listUntrackedTestFiles } from "./git.js";
 import type { TestCase, WsEvent } from "./protocol.js";
@@ -16,7 +16,7 @@ const GENERATOR_AGENT_FILE = ".github/agents/playwright-test-generator.agent.md"
 
 /** 讀取產生器規範（去掉 YAML frontmatter）當作 system prompt；找不到則回退簡短規範。 */
 function loadGeneratorSpec(): string {
-  const p = resolve(AT_REPO_PATH, GENERATOR_AGENT_FILE);
+  const p = resolve(atRepoPath(), GENERATOR_AGENT_FILE);
   if (existsSync(p)) {
     let body = readFileSync(p, "utf8");
     // 去除開頭的 --- frontmatter ---
@@ -75,13 +75,22 @@ function buildExportPrompt(cases: TestCase[], product: string): string {
 }
 
 export async function exportToPytest(
-  payload: { cases: TestCase[]; product?: string; agent?: string },
+  payload: { cases: TestCase[]; product?: string; agent?: string; model?: string },
   emit: Emit,
 ): Promise<{ files: string[]; summary: string }> {
+  const atRepo = atRepoPath();
+  if (!atRepo) throw new Error("未設定 automatic-testing 專案路徑，無法匯出 pytest（請於設定頁填寫）");
   const product = payload.product ?? "pwa";
   const agentName = payload.agent ?? DEFAULT_AGENT;
   const agent = getAgent(agentName);
   if (!(await agent.isAvailable())) throw new Error(`agent '${agentName}' 不可用`);
+  // 沿用測試執行區設定的 model：claude/codex 用 payload.model；codex 未指定用 config.toml
+  const resolvedModel =
+    agentName === "claude"
+      ? payload.model || CLAUDE_MODEL
+      : agentName === "codex"
+        ? payload.model || (CODEX_MODEL.startsWith("(") ? undefined : CODEX_MODEL)
+        : undefined;
 
   emit({ type: "agent.log", payload: { runId: "export", kind: "system", text: `開始生成 pytest（product=${product}, ${payload.cases.length} 案例）…` } });
 
@@ -95,8 +104,8 @@ export async function exportToPytest(
     res = await agent.run({
       prompt: buildExportPrompt(payload.cases, product),
       systemPrompt: loadGeneratorSpec(),
-      cwd: AT_REPO_PATH,
-      model: agentName === "claude" ? CLAUDE_MODEL : undefined,
+      cwd: atRepo,
+      model: resolvedModel,
       signal: ctrl.signal,
       onEvent: (e) => emit({ type: "agent.log", payload: { runId: "export", kind: e.kind, text: e.text } }),
     });
@@ -109,7 +118,7 @@ export async function exportToPytest(
     const created = (await listUntrackedTestFiles()).filter((f) => !beforeUntracked.has(f));
     for (const f of created) {
       try {
-        rmSync(resolve(AT_REPO_PATH, f), { force: true });
+        rmSync(resolve(atRepo, f), { force: true });
       } catch {
         /* noop */
       }

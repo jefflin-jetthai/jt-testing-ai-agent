@@ -48,7 +48,11 @@ function headers(token) {
 }
 
 async function api(token, path) {
-  const res = await fetch(`${NOTION_API}${path}`, { headers: headers(token) });
+  // no-store：不吃瀏覽器 HTTP 快取，確保每次都讀到 Notion 最新內容
+  const res = await fetch(`${NOTION_API}${path}`, {
+    headers: { ...headers(token), "Cache-Control": "no-cache" },
+    cache: "no-store",
+  });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.message || `Notion HTTP ${res.status}`);
   return json;
@@ -95,7 +99,7 @@ function ordinalOf(text) {
 /** 區段標籤判斷 → 回傳 section key 或 null。 */
 function sectionOf(text) {
   const t = text.trim();
-  if (/^目的|^目標|purpose/i.test(t)) return "purpose";
+  if (/測試目的|測試目標|^目的|^目標|purpose/i.test(t)) return "purpose";
   if (/前置條件|前提|precondition/i.test(t)) return "preconditions";
   if (/測試步驟|^步驟|^操作|steps/i.test(t)) return "steps";
   if (/確認項目|預期|驗證|expected|assert/i.test(t)) return "expected";
@@ -103,9 +107,12 @@ function sectionOf(text) {
   return null;
 }
 
-/** 解析單一 TC heading 的 children → {purpose, preconditions, steps, expected, aiReportBlockId}。 */
+/**
+ * 解析單一 TC 的 children → {purpose, preconditions, steps, expected, aiReportBlockId}。
+ * 會遞迴進巢狀內容（如 to_do / 段落底下的 code、清單、子項），避免漏讀；
+ * 但不進入「AI測試報告結果」區段（那是回寫的報告，非測試規格）。
+ */
 async function parseTcDetail(token, tcBlockId) {
-  const children = await getChildren(token, tcBlockId);
   const detail = {
     purpose: "",
     preconditions: [],
@@ -115,29 +122,38 @@ async function parseTcDetail(token, tcBlockId) {
   };
   let current = null;
 
-  for (const b of children) {
-    const text = blockText(b).trim();
-    const sec = sectionOf(text);
-    if (sec === "_aiReport") {
-      detail.aiReportBlockId = b.id;
-      current = null;
-      continue;
-    }
-    if (sec) {
-      current = sec;
-      // 標籤同列可能就帶內容（如「目的：xxx」）
-      const inline = text.replace(/^[^：:]*[：:]/, "").trim();
-      if (sec === "purpose" && inline) detail.purpose = inline;
-      continue;
-    }
-    if (!text) continue;
-    // 條列 / 內文 → 歸入目前區段
-    if (current === "purpose") {
-      detail.purpose = detail.purpose ? `${detail.purpose} ${text}` : text;
-    } else if (current && Array.isArray(detail[current])) {
-      detail[current].push(text);
+  async function walk(blockId, depth, indent) {
+    if (depth > 4) return;
+    const children = await getChildren(token, blockId);
+    for (const b of children) {
+      const text = blockText(b).trim();
+      const sec = sectionOf(text);
+      if (sec === "_aiReport") {
+        detail.aiReportBlockId = b.id;
+        current = null;
+        continue; // 不遞迴進報告內容
+      }
+      if (sec) {
+        current = sec;
+        const inline = text.replace(/^[^：:]*[：:]/, "").trim(); // 「目的：xxx」同列內容
+        if (sec === "purpose" && inline) detail.purpose = inline;
+        if (b.has_children) await walk(b.id, depth + 1, indent); // 標籤底下若還有內容
+        continue;
+      }
+      if (text) {
+        const line = indent ? `${indent}${text}` : text;
+        if (current === "purpose") {
+          detail.purpose = detail.purpose ? `${detail.purpose} ${text}` : text;
+        } else if (current && Array.isArray(detail[current])) {
+          detail[current].push(line);
+        }
+      }
+      // 巢狀內容（to_do/段落底下的 code、子清單等）→ 縮排後併入同區段
+      if (b.has_children) await walk(b.id, depth + 1, indent + "　");
     }
   }
+
+  await walk(tcBlockId, 0, "");
   return detail;
 }
 

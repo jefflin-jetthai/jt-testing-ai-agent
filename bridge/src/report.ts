@@ -9,7 +9,8 @@ import type { TestCase } from "./protocol.js";
 const STATUS_EMOJI: Record<string, string> = {
   pass: "✅ PASS",
   fail: "❌ FAIL",
-  error: "⚠️ ERROR",
+  warn: "⚠️ WARN",
+  error: "🛑 ERROR",
 };
 
 /** 從 agent 最終輸出抽出 CHECKS 區塊（逐條確認項目結果）。 */
@@ -24,9 +25,11 @@ function extractChecks(finalText: string): string[] {
 
 /** 把一條 check 拆成 {確認項目, 結果, 說明}。形如「<項目>: PASS - <說明>」（項目內可含全形「：」）。 */
 function parseCheck(c: string): { item: string; result: string; note: string } {
-  const m = c.match(/^(.*):\s*(PASS|FAIL|ERROR)\b\s*[-–—]?\s*([\s\S]*)$/i);
+  const m = c.match(/^(.*):\s*(PASS|FAIL|WARN|BLOCKED|SKIP(?:PED)?|ERROR)\b\s*[-–—]?\s*([\s\S]*)$/i);
   if (!m) return { item: c, result: "", note: "" };
-  return { item: m[1].trim(), result: m[2].toUpperCase(), note: m[3].trim() };
+  const raw = m[2].toUpperCase();
+  const result = raw.startsWith("WARN") || raw.startsWith("BLOCK") || raw.startsWith("SKIP") ? "WARN" : raw;
+  return { item: m[1].trim(), result, note: m[3].trim() };
 }
 
 /** markdown 表格儲存格：跳脫 `|`、把換行壓成空白，空值補「-」。 */
@@ -40,7 +43,7 @@ function cell(s: unknown): string {
 
 export interface BuildReportArgs {
   tc: TestCase;
-  status: "pass" | "fail" | "error";
+  status: "pass" | "fail" | "warn" | "error";
   summary: string;
   finalText: string;
   agentName: string;

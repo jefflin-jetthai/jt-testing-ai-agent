@@ -59,6 +59,25 @@ input[type="text"] {
   border-radius: 4px;
   padding: 5px 8px;
 }
+/* 輸入框 + 框內右側貼上鈕 */
+.input-wrap { flex: 1; min-width: 120px; position: relative; display: flex; }
+.input-wrap input[type="text"] { width: 100%; min-width: 0; padding-right: 30px; }
+#btn-paste {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 0;
+  padding: 2px 5px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+#btn-paste:hover { opacity: 1; background: #3a3a3a; }
 button {
   background: var(--accent);
   color: #fff;
@@ -77,14 +96,28 @@ pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
 .cases { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow: auto; }
 .case {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
   padding: 8px;
   background: #262626;
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+.case-row { display: flex; gap: 8px; }
+.case-head { flex: 1; cursor: pointer; }
 .case .meta { font-size: 11px; color: var(--muted); }
 .case .tc { color: var(--accent); font-weight: 600; }
+.case .caret { color: var(--muted); font-size: 10px; margin-left: 4px; }
+.case-detail {
+  margin: 8px 0 2px 26px;
+  font-size: 12px;
+  color: #ccc;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.case-detail h5 { margin: 6px 0 2px; font-size: 11px; color: var(--accent); }
+.case-detail ul, .case-detail ol { margin: 0 0 4px; padding-left: 18px; }
+.case-detail li { margin: 1px 0; }
+.case-detail p { margin: 2px 0; }
 .log {
   margin-top: 10px;
   font-family: ui-monospace, monospace;
@@ -99,6 +132,7 @@ pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
 }
 .log .err { color: #f85149; }
 .log .ok { color: var(--ok); }
+.log .warn { color: #e3b341; }
 .log .tool { color: #d2a8ff; }
 .result {
   background: #262626;
@@ -110,6 +144,7 @@ pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
 .result-head { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
 .result-head .ok { color: var(--ok); font-weight: 600; }
 .result-head .err { color: #f85149; font-weight: 600; }
+.result-head .warn { color: #e3b341; font-weight: 600; }
 .result .gif {
   width: 100%;
   margin-top: 8px;

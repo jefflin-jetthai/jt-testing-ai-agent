@@ -35,7 +35,7 @@ function connect() {
 
 // 重點式錄影：每個「步驟」後通知 bridge 擷取一張截圖（非 CDP 指令，bridge 端特別處理）。
 // 含 evaluate（量測/驗證型測試的關鍵步驟），排除 snapshot（純讀 DOM、呼叫頻繁且畫面無變化）。
-const CAPTURE_TOOLS = new Set(["navigate", "click", "fill", "wait_for", "evaluate"]);
+const CAPTURE_TOOLS = new Set(["navigate", "click", "fill", "wait_for", "evaluate", "set_viewport"]);
 function signalCapture(label) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     try { ws.send(JSON.stringify({ jt: "capture", label })); } catch { /* noop */ }
@@ -156,6 +156,25 @@ async function toolEvaluate({ expression }) {
   return typeof v === "string" ? v : JSON.stringify(v);
 }
 
+/** 設定 viewport 尺寸（響應式測試用），透過 CDP Emulation.setDeviceMetricsOverride。 */
+async function toolSetViewport({ width, height, mobile }) {
+  const w = Math.round(Number(width) || 0);
+  const h = Math.round(Number(height) || 800);
+  if (!w || w < 1) throw new Error("需要有效的 width");
+  const isMobile = !!mobile;
+  const r = await cdp("Emulation.setDeviceMetricsOverride", {
+    width: w,
+    height: h,
+    deviceScaleFactor: isMobile ? 2 : 1,
+    mobile: isMobile,
+  });
+  if (r.error) throw new Error(r.error.message);
+  await cdp("Emulation.setTouchEmulationEnabled", { enabled: isMobile }); // 行動裝置同步開觸控
+  // 等版面依新尺寸重排
+  await evalJs(`new Promise(res => requestAnimationFrame(() => setTimeout(() => res(true), 150)))`, true).catch(() => {});
+  return `已設定 viewport 為 ${w}x${h}${isMobile ? "（行動裝置模式）" : "（桌機模式）"}`;
+}
+
 const TOOLS = {
   snapshot: {
     def: { description: "讀取當前分頁：URL、標題、互動元素清單（含 ref）、可見文字。操作前先用它了解頁面。", inputSchema: { type: "object", properties: {} } },
@@ -180,6 +199,10 @@ const TOOLS = {
   evaluate: {
     def: { description: "在分頁執行任意 JS 運算式並回傳結果（驗證用，如 document.querySelectorAll('x').length）。", inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] } },
     run: (a) => toolEvaluate(a),
+  },
+  set_viewport: {
+    def: { description: "設定瀏覽器 viewport 尺寸（響應式 / RWD 測試用）。width 必填；height 預設 800；mobile=true 啟用行動裝置模式（觸控 + deviceScaleFactor=2）。例：桌機用 width=1200；手機用 width=390, mobile=true。", inputSchema: { type: "object", properties: { width: { type: "number" }, height: { type: "number" }, mobile: { type: "boolean" } }, required: ["width"] } },
+    run: (a) => toolSetViewport(a),
   },
 };
 

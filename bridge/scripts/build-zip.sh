@@ -24,6 +24,12 @@ STAGE="$OUT/zipnode/$APPDIR"
 rm -rf "$OUT/zipnode"; mkdir -p "$STAGE"
 cp "$OUT/bundle.cjs" "$STAGE/bundle.cjs"
 
+# 帶上 AI 測試規範（attach 模式 system prompt；使用者可編輯覆寫內建預設）
+if [ -d "$ROOT/agents" ]; then
+  cp -R "$ROOT/agents" "$STAGE/agents"
+  find "$STAGE/agents" -name ".DS_Store" -delete 2>/dev/null || true
+fi
+
 # 帶上 extension（Load unpacked，固定 ID）
 if [ -d "$ROOT/../extension" ]; then
   cp -R "$ROOT/../extension" "$STAGE/extension"
@@ -46,6 +52,8 @@ DEST="\$HOME/Library/Application Support/JT Testing AI Agent"
 
 mkdir -p "\$DEST"
 cp "\$DIR/bundle.cjs" "\$DEST/bundle.cjs"
+# AI 測試規範（與 bundle 同層 agents/，供 attach 模式讀取；可日後編輯）
+rm -rf "\$DEST/agents"; [ -d "\$DIR/agents" ] && cp -R "\$DIR/agents" "\$DEST/agents"
 
 # launcher（裝在非保護目錄）：用系統 node 跑 bundle（--native-host 模式）
 cat > "\$DEST/launcher.sh" <<L

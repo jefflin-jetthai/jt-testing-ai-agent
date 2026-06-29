@@ -93,6 +93,31 @@ function call(type, payload, timeoutMs = 120000) {
   });
 }
 
+/**
+ * 把 Options 設定的 automatic-testing 路徑推給 bridge（動態生效，免重啟），
+ * 再依結果即時顯示/隱藏「匯出 pytest」區。cfg 可選（連線當下已有則沿用其當前值比對）。
+ */
+async function syncAtRepo(cfg) {
+  if (!bridgeConnected) return;
+  const { atRepoPath } = await new Promise((r) => chrome.storage.sync.get(["atRepoPath"], r));
+  const desired = (atRepoPath ?? "").trim();
+  let configured = cfg ? cfg.atRepoConfigured : false;
+  try {
+    // 永遠送一次，讓 bridge 設定檔與 Options 一致（動態讀取，存檔即生效）
+    const r = await call("config.setAtRepo", { path: desired });
+    configured = r.configured;
+    if (desired && !r.exists) logLine(`⚠ 設定的 AT 路徑不存在：${desired}`, "err");
+  } catch (e) {
+    logLine(`設定 AT 路徑失敗：${e.message}`, "err");
+  }
+  $("export-section").style.display = configured ? "" : "none";
+}
+
+// Options 頁改了 automatic-testing 路徑 → 連線中即時套用、更新匯出顯示（免重連/重啟）
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.atRepoPath) syncAtRepo();
+});
+
 async function connect() {
   // 冪等：先拆掉舊連線，避免重複連線造成事件重複處理
   if (ws) {
@@ -139,21 +164,8 @@ async function connect() {
     try {
       const cfg = await call("config.describe");
       $("config-box").textContent = JSON.stringify(cfg, null, 2);
-      // 套用 Options 設定的 automatic-testing 路徑
-      const { atRepoPath } = await new Promise((r) =>
-        chrome.storage.sync.get(["atRepoPath"], r),
-      );
-      if (atRepoPath && atRepoPath !== cfg.atRepoPath) {
-        try {
-          const r = await call("config.setAtRepo", { path: atRepoPath });
-          if (!r.exists) logLine(`⚠ 設定的 AT 路徑不存在：${atRepoPath}`, "err");
-          if (r.needsRestart)
-            logLine("AT 路徑已更新，請按「停止 bridge」再「連線」套用", "tool");
-        } catch (e) {
-          logLine(`設定 AT 路徑失敗：${e.message}`, "err");
-        }
-      }
-      if (!cfg.atRepoExists) logLine("⚠ AT repo 路徑不存在（可於設定指定）", "err");
+      // 套用 Options 設定的 automatic-testing 路徑（選填；可空＝清除）→ 動態生效並更新匯出顯示
+      await syncAtRepo(cfg);
       // 依實際可用的 agent CLI 啟用下拉選項
       const avail = new Set(cfg.availableAgents || ["claude"]);
       for (const opt of $("agent-select").options) {
@@ -164,6 +176,10 @@ async function connect() {
       if ($("agent-select").selectedOptions[0]?.disabled && firstAvailable) {
         $("agent-select").value = firstAvailable.value;
       }
+      if (cfg.claudeModel) agentModels.claude = cfg.claudeModel;
+      if (cfg.codexModel) agentModels.codex = cfg.codexModel;
+      if (cfg.antigravityModel) agentModels.antigravity = cfg.antigravityModel;
+      updateModelUI(); // 依目前 agent 填入下拉並選中偵測到的 model
       refreshChromeStatus();
     } catch (e) {
       logLine(`config 讀取失敗：${e.message}`, "err");
@@ -204,6 +220,52 @@ let attachReady = false; // attach 模式：是否已成功接管當前分頁
 let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
 let running = false; // 測試執行中
 let exporting = false; // 匯出 pytest 中
+// 各 agent 的 model，bridge 連線後由 config.describe 帶回
+const agentModels = { claude: "claude-opus-4-8", codex: "(codex 預設)", antigravity: "(CLI 預設)" };
+
+// 可下拉選 model 的 agent 與其選項（antigravity 的 CLI 不吃 -m，故不列、改顯示文字）
+const MODEL_OPTIONS = {
+  claude: [
+    ["claude-opus-4-8", "Opus 4.8"],
+    ["claude-sonnet-4-6", "Sonnet 4.6"],
+    ["claude-haiku-4-5-20251001", "Haiku 4.5"],
+  ],
+  codex: [
+    ["gpt-5.5", "gpt-5.5"],
+    ["gpt-5-codex", "gpt-5-codex"],
+    ["gpt-5", "gpt-5"],
+  ],
+};
+
+/** 依 agent 填入 model 下拉選項；把偵測到的目前 model 也納入並選中。 */
+function setModelOptions(agent) {
+  const sel = $("model-select");
+  const opts = (MODEL_OPTIONS[agent] || []).slice();
+  const current = agentModels[agent];
+  if (current && !current.startsWith("(") && !opts.some((o) => o[0] === current))
+    opts.unshift([current, current]); // bridge 偵測到的 model 不在清單 → 補進去
+  sel.innerHTML = opts
+    .map(([v, l]) => `<option value="${escapeHtml(v)}">${escapeHtml(l)}</option>`)
+    .join("");
+  if (current && !current.startsWith("(")) sel.value = current;
+}
+
+/** 有下拉選項的 agent（claude/codex）→ 顯示下拉；其它（antigravity）→ 顯示 model 文字。 */
+function updateModelUI() {
+  const agent = $("agent-select")?.value || "claude";
+  const sel = $("model-select");
+  const lbl = $("model-label");
+  if (!sel || !lbl) return;
+  if (MODEL_OPTIONS[agent]) {
+    setModelOptions(agent);
+    sel.style.display = "";
+    lbl.style.display = "none";
+  } else {
+    sel.style.display = "none";
+    lbl.style.display = "";
+    lbl.textContent = `· ${agentModels[agent] || "?"}`;
+  }
+}
 
 /**
  * 執行鈕：案例已讀取 + 瀏覽器就緒（attach 已接管 / remote Chrome 已啟動）+ 非執行中。
@@ -248,12 +310,12 @@ function handleEvent(msg) {
       if (p.phase === "start") logLine(`▶ 開始 ${p.tcId}：${p.title || ""}`, "tool");
       break;
     case "run.result": {
-      const ok = p.status === "pass";
+      const emoji =
+        p.status === "pass" ? "✅" : p.status === "fail" ? "❌" : p.status === "warn" ? "⚠️" : "🛑";
+      const cls = p.status === "pass" ? "ok" : p.status === "warn" ? "tool" : "err";
       logLine(
-        `${ok ? "✅" : p.status === "fail" ? "❌" : "⚠️"} ${p.tcId} ${p.status.toUpperCase()} (${Math.round(
-          (p.durationMs || 0) / 1000,
-        )}s) — ${p.summary || ""}`,
-        ok ? "ok" : "err",
+        `${emoji} ${p.tcId} ${p.status.toUpperCase()} (${Math.round((p.durationMs || 0) / 1000)}s) — ${p.summary || ""}`,
+        cls,
       );
       renderResult(p);
       break;
@@ -282,12 +344,17 @@ function renderResult(p) {
   const box = $("results");
   const card = document.createElement("div");
   card.className = "result";
-  const ok = p.status === "pass";
-  const badge = ok ? "✅ PASS" : p.status === "fail" ? "❌ FAIL" : "⚠️ ERROR";
+  const badgeMap = {
+    pass: ["✅ PASS", "ok"],
+    fail: ["❌ FAIL", "err"],
+    warn: ["⚠️ WARN", "warn"],
+    error: ["🛑 ERROR", "err"],
+  };
+  const [badge, badgeCls] = badgeMap[p.status] || badgeMap.error;
   card.innerHTML = `
     <div class="result-head">
       <span class="tc">${escapeHtml(p.tcId)}</span>
-      <span class="${ok ? "ok" : "err"}">${badge}</span>
+      <span class="${badgeCls}">${badge}</span>
       <span class="meta">${Math.round((p.durationMs || 0) / 1000)}s</span>
     </div>
     <div class="meta">${escapeHtml(p.summary || "")}</div>
@@ -329,10 +396,11 @@ async function loadCases() {
     renderCases();
     const metaStr = meta?.version ? ` (version ${meta.version}, ENV ${meta.ENV || "-"})` : "";
     logLine(`讀到 ${testCases.length} 個測試案例${metaStr}`, "ok");
-    // 讀取成功 → 讀取鈕 disable、重置鈕 enable
+    // 讀取成功 → 讀取鈕 disable、重置/重讀鈕 enable
     if (testCases.length) {
       $("btn-load").disabled = true;
       $("btn-reset").disabled = false;
+      $("btn-reread").disabled = false;
     }
   } catch (e) {
     logLine(`讀取失敗：${e.message}`, "err");
@@ -340,20 +408,44 @@ async function loadCases() {
   }
 }
 
+/** 案例展開時的預覽內容：目的 / 前置條件 / 測試步驟 / 確認項目。 */
+function casePreviewHtml(tc) {
+  const list = (items, ordered) =>
+    `<${ordered ? "ol" : "ul"}>${items.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</${ordered ? "ol" : "ul"}>`;
+  const parts = [];
+  if (tc.purpose) parts.push(`<h5>目的</h5><p>${escapeHtml(tc.purpose)}</p>`);
+  if (tc.preconditions.length) parts.push(`<h5>前置條件</h5>${list(tc.preconditions, false)}`);
+  if (tc.steps.length) parts.push(`<h5>測試步驟</h5>${list(tc.steps, true)}`);
+  if (tc.expected.length) parts.push(`<h5>確認項目</h5>${list(tc.expected, false)}`);
+  return parts.join("") || `<p class="meta">（無細節）</p>`;
+}
+
 function renderCases() {
   const box = $("cases");
   box.innerHTML = "";
   for (const tc of testCases) {
-    const el = document.createElement("label");
+    const el = document.createElement("div");
     el.className = "case";
     el.innerHTML = `
-      <input type="checkbox" data-block="${tc.blockId}" checked />
-      <div>
-        <div><span class="tc">${escapeHtml(tc.tcId)}</span> ${escapeHtml(tc.title)}</div>
-        <div class="meta">${tc.steps.length} 步驟 · ${tc.expected.length} 確認項目${
-          tc.preconditions.length ? " · " + tc.preconditions.length + " 前置" : ""
-        }</div>
-      </div>`;
+      <div class="case-row">
+        <input type="checkbox" data-block="${tc.blockId}" />
+        <div class="case-head" title="點擊展開 / 收合內容">
+          <div><span class="tc">${escapeHtml(tc.tcId)}</span> ${escapeHtml(tc.title)}<span class="caret">▸</span></div>
+          <div class="meta">${tc.steps.length} 步驟 · ${tc.expected.length} 確認項目${
+            tc.preconditions.length ? " · " + tc.preconditions.length + " 前置" : ""
+          }</div>
+        </div>
+      </div>
+      <div class="case-detail" style="display:none">${casePreviewHtml(tc)}</div>`;
+    // 點標題列展開 / 收合（預設收合），不影響 checkbox 勾選
+    const head = el.querySelector(".case-head");
+    const detail = el.querySelector(".case-detail");
+    const caret = el.querySelector(".caret");
+    head.addEventListener("click", () => {
+      const open = detail.style.display === "none";
+      detail.style.display = open ? "block" : "none";
+      caret.textContent = open ? "▾" : "▸";
+    });
     box.appendChild(el);
   }
   const hasNone = testCases.length === 0;
@@ -397,7 +489,26 @@ $("btn-stop-bridge").addEventListener("click", async () => {
   try { ws?.close(); } catch { /* noop */ }
   setConnected(false);
 });
+// 貼上：把剪貼簿內容填入 Notion 頁面輸入框
+$("btn-paste").addEventListener("click", async () => {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) return logLine("剪貼簿是空的", "tool");
+    $("page-id").value = text;
+    $("page-id").focus();
+    logLine("已貼上剪貼簿內容", "ok");
+  } catch (e) {
+    logLine(`貼上失敗：${e.message}（可改用 Cmd+V）`, "err");
+  }
+});
 $("btn-load").addEventListener("click", loadCases);
+// 重讀：清掉現有清單、強制重新讀取 Notion 最新內容（fetch 已設 no-store，不吃快取）
+$("btn-reread").addEventListener("click", () => {
+  logLine("重讀 Notion（清除快取）…", "tool");
+  testCases = [];
+  renderCases();
+  loadCases();
+});
 $("btn-reset").addEventListener("click", () => {
   testCases = [];
   renderCases(); // 清空清單、隱藏工具列、disable 執行/匯出
@@ -407,6 +518,7 @@ $("btn-reset").addEventListener("click", () => {
   lastRunId = null; // 連帶 disable「檢視截圖」
   $("btn-load").disabled = false;
   $("btn-reset").disabled = true;
+  $("btn-reread").disabled = true;
   updateActionButtons();
   logLine("已重置（清空案例、結果與 log）", "tool");
 });
@@ -424,9 +536,11 @@ $("btn-run").addEventListener("click", async () => {
   updateActionButtons();
   updateStopBridgeBtn();
   try {
+    const agent = $("agent-select")?.value || "claude";
     const { runId } = await call("run.start", {
       cases,
-      agent: $("agent-select")?.value || "claude",
+      agent,
+      model: MODEL_OPTIONS[agent] ? $("model-select")?.value : undefined,
       mode: $("mode-select")?.value || "remote",
       target: { url: tab?.url, title: tab?.title, tabId: tab?.id },
     });
@@ -479,6 +593,8 @@ async function refreshChromeStatus() {
 
 // 模式切換：顯示對應的輔助列
 $("mode-select").addEventListener("change", applyModeUI);
+// 切換 agent → 更新右側 model 顯示（claude 顯示下拉，其它顯示文字）
+$("agent-select").addEventListener("change", updateModelUI);
 
 // 從目前 bridge ws url 推導 /cdp-relay 位址
 function relayUrl() {
@@ -550,8 +666,11 @@ $("btn-export").addEventListener("click", async () => {
   updateActionButtons(); // disable 匯出、enable 停止
   updateStopBridgeBtn();
   try {
+    // 沿用上面測試執行區設定的 agent + model（不另外選）
+    const agent = $("agent-select")?.value || "claude";
+    const model = MODEL_OPTIONS[agent] ? $("model-select")?.value : undefined;
     // 不設逾時：生成可能很久，中止改用「停止」鈕
-    const r = await call("export.toPytest", { cases, product, agent: $("agent-select").value }, 0);
+    const r = await call("export.toPytest", { cases, product, agent, model }, 0);
     const files = r.files || [];
     $("export-files").innerHTML = files.length
       ? `匯出檔案：<br>` + files.map((f) => `• ${escapeHtml(f)}`).join("<br>")
