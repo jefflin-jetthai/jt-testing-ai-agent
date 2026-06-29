@@ -50,12 +50,12 @@ echo "  ✓ 已 commit + tag v$VER"
 if command -v gh >/dev/null 2>&1; then
   git push origin HEAD --tags
   gh release create "v$VER" "$BUNDLE" "$ZIP" --title "v$VER" --generate-notes
-  echo "✅ 已 push 並建立 GitHub Release v$VER（assets 已上傳）"
+  echo "✅ 已 push 並建立 GitHub Release v${VER}（assets 已上傳）"
 else
   echo ""
   echo "✅ 本機已就緒。未安裝 gh CLI，請手動完成最後兩步："
   echo "  1) git push origin main --tags"
-  echo "  2) 到 GitHub 建 Release（tag v$VER），上傳這兩個 asset："
+  echo "  2) 到 GitHub 建 Release（tag v${VER}），上傳這兩個 asset："
   echo "       $BUNDLE"
   echo "       $ZIP"
 fi
