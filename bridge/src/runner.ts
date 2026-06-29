@@ -85,7 +85,11 @@ export async function startRun(
   payload: RunStartPayload,
   emit: Emit,
 ): Promise<{ runId: string }> {
-  const runId = randomUUID().slice(0, 8);
+  // 以本地時間命名產出資料夾，方便辨識（YYYY-MM-DD_HH-MM-SS_xxxx；後綴防同秒碰撞）
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const runId = `${stamp}_${randomUUID().slice(0, 4)}`;
   const agentName = payload.agent ?? DEFAULT_AGENT;
   const agent = getAgent(agentName);
 

@@ -4,7 +4,7 @@
  * 目前實作 Phase 0（連線 / hello / config）與 Phase 1（notion.listTestCases）。
  * Phase 2+ 的 run.start / export 等 handler 先回 "not implemented"，逐步補上。
  */
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -169,17 +169,34 @@ function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
       return `<div class="item"><a href="${href}">📄 ${e.name}</a></div>`;
     })
     .join("\n");
+  const hasImg = entries.some((e) => e.isDirectory() || isImg(e.name));
+  const clearUrl = base.replace("/artifacts/", "/artifacts-clear/");
   return `<!doctype html><meta charset="utf-8"><title>截圖 / 錄影 — ${urlPath}</title>
 <style>
   body{font-family:-apple-system,system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:16px}
-  h1{font-size:15px;color:#9cdcfe;font-weight:600}
+  h1{font-size:15px;color:#9cdcfe;font-weight:600;display:inline-block;margin-right:12px}
   .grid{display:flex;flex-wrap:wrap;gap:12px}
   figure{margin:0;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:8px;max-width:320px}
   figure img{max-width:300px;display:block;border-radius:4px}
   figcaption{font-size:12px;color:#aaa;margin-top:6px;word-break:break-all}
   .item{padding:4px 0}a{color:#4fc1ff}
+  button{background:#6e4949;color:#fff;border:0;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px}
+  button:disabled{background:#3a3a3a;color:#888;cursor:not-allowed}
 </style>
-<h1>${urlPath}</h1><div class="grid">${items || "<p>（此目錄沒有檔案）</p>"}</div>`;
+<h1>${urlPath}</h1>${hasImg ? `<button id="clr" onclick="clearImgs()">🗑 清除圖片</button>` : ""}
+<div class="grid">${items || "<p>（此目錄沒有檔案）</p>"}</div>
+<script>
+async function clearImgs(){
+  if(!confirm('確定清除此次測試的所有截圖 / 錄影？（報告 .md 會保留，無法復原）')) return;
+  const b=document.getElementById('clr'); b.disabled=true; b.textContent='清除中…';
+  try{
+    const r=await fetch(${JSON.stringify(clearUrl)},{method:'DELETE'});
+    const j=await r.json();
+    if(j.ok){ b.textContent='已清除 '+j.removed+' 項'; setTimeout(()=>location.reload(),600); }
+    else{ b.disabled=false; b.textContent='🗑 清除圖片'; alert('清除失敗：'+(j.error||'')); }
+  }catch(e){ b.disabled=false; b.textContent='🗑 清除圖片'; alert('清除失敗：'+e.message); }
+}
+</script>`;
 }
 
 const http = createServer((req, res) => {
@@ -187,6 +204,35 @@ const http = createServer((req, res) => {
   if (url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, ...describeConfig() }));
+    return;
+  }
+  // 清除某次產出的圖片/錄影：DELETE /artifacts-clear/<runId>（保留 .md 報告）
+  if (url.startsWith("/artifacts-clear/")) {
+    const rel = normalize(decodeURIComponent(url.slice("/artifacts-clear/".length))).replace(/\/+$/, "");
+    if (!rel || rel.includes("..")) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ ok: false, error: "forbidden" }));
+      return;
+    }
+    const dir = join(artifactsDir(), rel);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ ok: false, error: "not found" }));
+      return;
+    }
+    let removed = 0;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        rmSync(p, { recursive: true, force: true }); // frame 暫存資料夾
+        removed++;
+      } else if (/\.(gif|jpe?g|png|webm)$/i.test(e.name)) {
+        rmSync(p, { force: true }); // 圖片 / 錄影
+        removed++;
+      }
+    }
+    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    res.end(JSON.stringify({ ok: true, removed }));
     return;
   }
   // 產出物（gif / markdown）瀏覽：/artifacts/<runId>/<file>
