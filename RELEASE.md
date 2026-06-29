@@ -36,9 +36,24 @@
 
 4. **commit + push** 版號變更與任何程式調整。
 
-## 使用者端體驗
+## 使用者端體驗（一鍵更新，1.0.3+）
 
-連線 → 有新版 → side panel 頂端綠色更新列 →
-「更新 bridge」(自動換 bridge) ＋「下載新版 zip」(手動換 extension：解壓覆蓋 → `chrome://extensions` reload)。
+連線 → 有新版 → side panel 頂端綠色更新列 → 按單一「**更新**」鈕：
+bridge 下載新 `bundle.cjs` + zip → 覆蓋自身 **與 extension 資料夾** → 擴充自動
+`chrome.runtime.reload()` 套用新版。**不需手動下載、不需開 chrome://extensions**。
 
 > 因 extension ID 固定，更新不需重設定、Notion Token 不會遺失。
+
+### 一鍵更新的啟用前提
+
+1. **需先安裝過 1.0.3+ 一次**（透過 Install.command）。更新機制是新加的，舊版沒有一鍵碼：
+   - 已發布的 v1.0.2 沒有 → 1.0.2→1.0.3 仍走「手動換 extension」
+   - **1.0.3 → 之後版本** 才是真正單鍵
+2. **Install.command 會記錄 extension 資料夾路徑**（寫入 `~/Library/Application Support/JT Testing AI Agent/extension-dir.txt`）。
+   bridge 一鍵更新時就是覆蓋這個資料夾 → **該資料夾請固定不動、勿刪除/搬移**。
+3. 若該檔不存在（舊安裝/手動載入未經 Install.command）→ 自動退回「只更新 bridge + 顯示手動下載 zip」。
+
+### 換機器 / 首次安裝（手動）
+
+解壓 zip → 雙擊 **Install.command**（被 Gatekeeper 擋就右鍵→開啟）→
+`chrome://extensions` 開發人員模式 → 載入未封裝 → 選資料夾內的 `extension`。
