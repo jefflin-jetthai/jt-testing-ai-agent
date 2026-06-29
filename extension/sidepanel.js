@@ -120,18 +120,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ── 線上更新偵測（GitHub Releases）───────────────────────────────────────────
 // 每次發版在此 repo 建一個 Release，附上 bundle.cjs 與 zip 兩個 asset 即可被偵測。
-// 來源可在 Options 頁的「更新來源」覆寫（指向公開位置）；留空用此預設。
-const UPDATE_FEED_DEFAULT =
+const UPDATE_FEED =
   "https://api.github.com/repos/jefflin-jetthai/jt-testing-ai-agent/releases/latest";
 let updateBundleUrl = null;
 let updateZipUrl = null;
-
-/** 取更新來源：Options 設定優先，否則內建預設。 */
-function getUpdateFeed() {
-  return new Promise((r) =>
-    chrome.storage.sync.get(["updateFeedUrl"], (s) => r((s.updateFeedUrl || "").trim() || UPDATE_FEED_DEFAULT)),
-  );
-}
 
 /** 比較版號 a vs b（回 1/0/-1）。 */
 function cmpVer(a, b) {
@@ -148,7 +140,7 @@ function cmpVer(a, b) {
 async function checkUpdate() {
   try {
     const cur = chrome.runtime.getManifest().version;
-    const res = await fetch(await getUpdateFeed(), {
+    const res = await fetch(UPDATE_FEED, {
       headers: { Accept: "application/vnd.github+json" },
       cache: "no-store",
     });

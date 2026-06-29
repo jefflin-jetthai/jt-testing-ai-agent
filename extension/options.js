@@ -8,11 +8,10 @@ const status = (msg, ok) => {
 };
 
 chrome.storage.sync.get(
-  ["notionToken", "atRepoPath", "updateFeedUrl"],
+  ["notionToken", "atRepoPath"],
   (s) => {
     $("notion-token").value = s.notionToken || "";
     $("at-repo-path").value = s.atRepoPath || "";
-    $("update-feed-url").value = s.updateFeedUrl || "";
   },
 );
 
@@ -21,7 +20,6 @@ $("save").addEventListener("click", () => {
     {
       notionToken: $("notion-token").value.trim(),
       atRepoPath: $("at-repo-path").value.trim(),
-      updateFeedUrl: $("update-feed-url").value.trim(),
     },
     () => status("已儲存 ✓（AT 路徑於連線時送給 bridge，需停止再連線套用）", true),
   );
