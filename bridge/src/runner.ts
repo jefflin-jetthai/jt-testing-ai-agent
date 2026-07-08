@@ -24,7 +24,8 @@ import {
   writeMcpConfig,
 } from "./mcp.js";
 import { isRelayConnected } from "./attach.js";
-import { attachSystemPrompt, SYSTEM_PROMPT, buildRunPrompt, parseVerdict } from "./prompt.js";
+import { attachSystemPrompt, SYSTEM_PROMPT, buildRunPrompt, parseMemory, parseVerdict } from "./prompt.js";
+import { appendKnowledge, loadKnowledge, productKey } from "./knowledge.js";
 import { StepRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
 import { writeMarkdown } from "./report.js";
 import { BRIDGE_PORT } from "./config.js";
@@ -202,7 +203,9 @@ export async function startRun(
           recorder = null;
         }
 
-        const prompt = buildRunPrompt(tc, payload.target);
+        // 每個 TC 都重讀知識庫：同一批 run 內，後面的 TC 能用到前面剛學到的知識
+        const knowledgeKey = productKey(payload.target?.url);
+        const prompt = buildRunPrompt(tc, payload.target, loadKnowledge(knowledgeKey));
         let finalText = "";
         try {
           const res = await agent.run({
@@ -231,6 +234,19 @@ export async function startRun(
         if (gifPath) log({ tcId: tc.tcId, kind: "system", text: `已產出錄影：${gifPath}` });
 
         const verdict = parseVerdict(finalText);
+
+        // 回寫產品知識庫（失敗不影響測試結果）
+        try {
+          const learned = parseMemory(finalText);
+          if (learned.length) {
+            const { added, path } = appendKnowledge(knowledgeKey, learned, tc.tcId);
+            if (added > 0)
+              log({ tcId: tc.tcId, kind: "system", text: `已累積產品知識 ${added} 條 → ${path}` });
+          }
+        } catch (e) {
+          log({ tcId: tc.tcId, kind: "stderr", text: `知識庫寫入失敗：${formatError(e)}` });
+        }
+
         const durationMs = Date.now() - startedAt;
         const gifFileName = gifPath ? `${artifactBase}.gif` : undefined;
 

@@ -107,8 +107,12 @@ export function attachSystemPrompt(): string {
   return ATTACH_SYSTEM_PROMPT_DEFAULT;
 }
 
-/** 單一 TC 的執行指令。要求結尾輸出機器可解析的 VERDICT 區塊。 */
-export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: string }): string {
+/** 單一 TC 的執行指令。要求結尾輸出機器可解析的 VERDICT 區塊與 MEMORY 知識區塊。 */
+export function buildRunPrompt(
+  tc: TestCase,
+  target?: { url?: string; title?: string },
+  knowledge?: string,
+): string {
   const lines: string[] = [];
   lines.push(`# 測試案例 ${tc.tcId}：${tc.title}`);
   if (target?.url) lines.push(`\n目標分頁 URL：${target.url}`);
@@ -119,6 +123,10 @@ export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: st
     lines.push(`\n## 測試步驟\n${tc.steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
   if (tc.expected.length)
     lines.push(`\n## 確認項目（逐條驗證）\n${tc.expected.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
+  if (knowledge)
+    lines.push(
+      `\n## 已知產品知識與執行技巧（過去測試累積，供參考）\n${knowledge}\n\n注意：知識是過去的觀察，若與實際頁面不符，以實際觀察為準。`,
+    );
 
   lines.push(
     [
@@ -140,9 +148,30 @@ export function buildRunPrompt(tc: TestCase, target?: { url?: string; title?: st
       "- 因『前置條件』無法滿足（未登入、無權限、找不到受測頁面/元素、缺資料）而無法執行驗證 → 用 WARN，並在 SUMMARY 寫明卡在哪、缺什麼。",
       "- 只有實際觀察到『不符合規格／確認項目明確失敗』才用 FAIL。",
       "- 所有確認項目皆符合 → PASS。",
+      "",
+      "5. 在 verdict 之後，把這次「新學到、下次測這個產品仍用得上」的知識輸出成下列格式：",
+      "",
+      "```memory",
+      "- [技巧] <元素定位/等待/操作上的訣竅，例如：登入按鈕無 data-testid，需用文字「登入」定位>",
+      "- [產品] <產品行為或功能特性，例如：訂單列表預設只顯示 30 天內資料>",
+      "```",
+      "",
+      "知識條目原則：只收「跨測試案例可重用」的通則；已列在『已知產品知識』的不要重複；單次測試資料、本次操作流水帳不要收；沒有新發現就輸出空的 memory 區塊。",
     ].join("\n"),
   );
   return lines.join("\n");
+}
+
+/** 從 agent 最終輸出解析 memory 區塊的知識條目；沒有區塊或為空 → 空陣列。 */
+export function parseMemory(finalText: string): string[] {
+  const block = finalText.match(/```memory([\s\S]*?)```/i)?.[1];
+  if (!block) return [];
+  return block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.replace(/^-\s*/, "").trim())
+    .filter((l) => l && !/^(無|沒有|N\/A|none)/i.test(l));
 }
 
 /** 從 agent 最終輸出解析 verdict。找不到 verdict 區塊時保守判為 error。 */
