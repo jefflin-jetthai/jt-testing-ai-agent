@@ -334,21 +334,32 @@ let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
 let running = false; // 測試執行中
 let exporting = false; // 匯出 pytest 中
 // 各 agent 的 model，bridge 連線後由 config.describe 帶回
-const agentModels = { claude: "claude-opus-4-8", codex: "(codex 預設)", antigravity: "(CLI 預設)" };
+const agentModels = { claude: "opus", codex: "(codex 預設)", antigravity: "(CLI 預設)" };
 
 // 可下拉選 model 的 agent 與其選項（antigravity 的 CLI 不吃 -m，故不列、改顯示文字）
+// claude 用 CLI 別名：執行時由 claude CLI 解析成該系列最新版，清單免維護
 const MODEL_OPTIONS = {
   claude: [
-    ["claude-opus-4-8", "Opus 4.8"],
-    ["claude-sonnet-4-6", "Sonnet 4.6"],
-    ["claude-haiku-4-5-20251001", "Haiku 4.5"],
+    ["opus", "Opus（最新）"],
+    ["sonnet", "Sonnet（最新）"],
+    ["haiku", "Haiku（最新）"],
   ],
   codex: [
+    ["", "(依 codex 設定)"], // 不帶 -m，由 codex config.toml 決定
     ["gpt-5.5", "gpt-5.5"],
     ["gpt-5-codex", "gpt-5-codex"],
     ["gpt-5", "gpt-5"],
   ],
 };
+
+// 執行時 agent CLI 回報的「實際解析到的 model」（run.model 事件；持久化供下次開啟顯示）
+const resolvedModels = {};
+chrome.storage.sync.get(["resolvedModels"], ({ resolvedModels: saved }) => {
+  if (saved && typeof saved === "object") {
+    Object.assign(resolvedModels, saved);
+    updateModelUI();
+  }
+});
 
 /** 依 agent 填入 model 下拉選項；把偵測到的目前 model 也納入並選中。 */
 function setModelOptions(agent) {
@@ -372,7 +383,10 @@ function updateModelUI() {
   if (MODEL_OPTIONS[agent]) {
     setModelOptions(agent);
     sel.style.display = "";
-    lbl.style.display = "none";
+    // 有跑過測試 → 顯示 CLI 實際解析到的完整版本（例如 sonnet → claude-sonnet-5）
+    const resolved = resolvedModels[agent];
+    lbl.style.display = resolved ? "" : "none";
+    lbl.textContent = resolved ? `· 實際: ${resolved}` : "";
   } else {
     sel.style.display = "none";
     lbl.style.display = "";
@@ -432,6 +446,15 @@ function handleEvent(msg) {
       const prefix = p.tcId ? `${p.tcId} ` : "";
       const cls = p.kind === "stderr" ? "err" : p.kind === "tool" ? "tool" : "";
       logLine(`${prefix}${p.text ?? ""}`, cls);
+      break;
+    }
+    case "run.model": {
+      // agent CLI 回報實際使用的 model（別名 → 完整 id）；更新標籤並持久化
+      if (p.agent && p.model && resolvedModels[p.agent] !== p.model) {
+        resolvedModels[p.agent] = p.model;
+        chrome.storage.sync.set({ resolvedModels });
+        updateModelUI();
+      }
       break;
     }
     case "run.step":

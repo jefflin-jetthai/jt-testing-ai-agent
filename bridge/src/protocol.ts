@@ -25,6 +25,7 @@ export type RequestType =
 
 export type EventType =
   | "agent.log" // agent 思考 / 工具呼叫的串流
+  | "run.model" // agent CLI 回報實際解析到的 model（別名 → 完整 id）
   | "run.step" // 單一 TC 步驟進度
   | "run.result" // 單一 TC 完成（pass/fail + markdown + gif 路徑）
   | "run.done"
@@ -46,6 +47,13 @@ export interface AgentLogPayload {
   tcId?: string;
   kind: "system" | "text" | "tool" | "result" | "stderr";
   text: string;
+}
+
+/** run.model 事件：agent CLI 回報本次執行實際使用的 model（例如別名 sonnet → claude-sonnet-5）。 */
+export interface RunModelPayload {
+  runId: string;
+  agent: string;
+  model: string;
 }
 
 /** run.result 事件：單一 TC 完成。 */

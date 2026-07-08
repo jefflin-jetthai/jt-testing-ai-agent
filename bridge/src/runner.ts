@@ -45,6 +45,19 @@ function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * 從 agent CLI 的原始事件抓「實際解析到的 model id」（別名 → 完整版本）。
+ * claude：init 事件的 model / assistant 事件的 message.model；codex：事件或 msg 內的 model 欄位（若有）。
+ */
+function extractResolvedModel(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, any>;
+  for (const m of [o.model, o.message?.model, o.msg?.model]) {
+    if (typeof m === "string" && m) return m;
+  }
+  return undefined;
+}
+
 function artifactBaseName(tcId: string): string {
   return (tcId || "TC")
     .replace(/[^A-Za-z0-9._-]+/g, "_")
@@ -126,6 +139,7 @@ export async function startRun(
     const log = (p: Omit<AgentLogPayload, "runId">) =>
       emit({ type: "agent.log", payload: { runId, ...p } });
     let runError: string | undefined;
+    let resolvedModelReported = false; // 每 run 只回報一次實際 model
     try {
       const mcpConfigPath = mode === "attach" ? writeBrowserMcpConfig() : writeMcpConfig(CDP_BROWSER_URL);
       const allowedTools = mode === "attach" ? JT_BROWSER_TOOLS : CHROME_DEVTOOLS_TOOLS;
@@ -216,7 +230,16 @@ export async function startRun(
             allowedTools,
             model: resolvedModel,
             signal: ctrl.signal,
-            onEvent: (e) => log({ tcId: tc.tcId, kind: e.kind, text: e.text }),
+            onEvent: (e) => {
+              log({ tcId: tc.tcId, kind: e.kind, text: e.text });
+              if (!resolvedModelReported) {
+                const m = extractResolvedModel(e.raw);
+                if (m) {
+                  resolvedModelReported = true;
+                  emit({ type: "run.model", payload: { runId, agent: agentName, model: m } });
+                }
+              }
+            },
           });
           finalText = res.finalText || (res.ok ? "" : "agent 執行失敗（未回傳錯誤內容）");
         } catch (err) {

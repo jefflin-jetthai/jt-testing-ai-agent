@@ -80,8 +80,8 @@ export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 8787);
 export const CDP_BROWSER_URL =
   process.env.CDP_BROWSER_URL ?? "http://127.0.0.1:9222";
 
-/** agent 預設 model（claude）。 */
-export const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? "claude-opus-4-8";
+/** agent 預設 model（claude）。用 CLI 別名（opus/sonnet/haiku）→ 執行時自動解析成該系列最新版。 */
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? "opus";
 
 /** 從 ~/.codex/config.toml 讀 model（codex 未指定 -m 時即用此）。 */
 function readCodexModel(): string | undefined {
