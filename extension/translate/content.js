@@ -346,6 +346,7 @@ function matchMeta(type) {
     case 'exact_target':   return { cls: 'tc-exact',   label: '完全符合', icon: '✅' };
     case 'partial_target': return { cls: 'tc-partial', label: '部分符合', icon: '🟡' };
     case 'fuzzy_target':   return { cls: 'tc-fuzzy',   label: '相似',     icon: '🟣' };
+    case 'template_target':return { cls: 'tc-exact',   label: '模板符合', icon: '🧩' };
     default:               return { cls: 'tc-partial', label: '部分符合', icon: '🟠' };
   }
 }

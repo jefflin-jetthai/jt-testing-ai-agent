@@ -7,7 +7,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (req.action === 'checkTranslation') {
-    handleCheck(req.text, sendResponse);
+    handleCheck(req.text, req.loose === true, sendResponse);
     return true;
   }
   if (req.action === 'refreshCache') {
@@ -46,14 +46,14 @@ async function handleRefresh(sendResponse) {
   }
 }
 
-async function handleCheck(text, sendResponse) {
+async function handleCheck(text, loose, sendResponse) {
   try {
     const settings = await getSettings();
     if (!settings.notionToken || (!settings.tableId && !settings.databaseId)) {
       sendResponse({ error: 'NOT_CONFIGURED' }); return;
     }
     const entries = await getTranslations(settings);
-    const results = findMatches(text, entries);
+    const results = findMatches(text, entries, loose);
     sendResponse({ success: true, results, totalEntries: entries.length });
   } catch (err) {
     sendResponse({ error: err.message || 'Unknown error' });
@@ -239,8 +239,15 @@ function extractPropText(prop) {
 
 // ── Matching ────────────────────────────────────────────────────────────────
 
-function findMatches(selected, entries) {
+/**
+ * loose=false（選字/懸停比對）：門檻嚴格，避免面板被低分結果洗版。
+ * loose=true（手動查詢）：關鍵字搜尋情境——包含即命中、相似門檻降低、回傳筆數放寬。
+ */
+function findMatches(selected, entries, loose = false) {
   const norm = normalizeText(selected);
+  const minPartial = loose ? 0 : 0.5;
+  const minFuzzy   = loose ? 0.4 : 0.45;
+  const limit      = loose ? 20 : 8;
   const results = [];
 
   for (const entry of entries) {
@@ -252,13 +259,18 @@ function findMatches(selected, entries) {
         break;
       }
       const score = partialScore(normText, norm);
-      if (score > 0.5 && (!best || score > best.score)) {
+      if (score > minPartial && (!best || score > best.score)) {
         best = { field, type: 'partial_target', score };
       }
-      // 模糊比對：非包含關係但用字高度相似（改寫、標點差異、插值變數）
+      // 模糊比對：非包含關係但用字高度相似（改寫、標點差異）
       const fuzzy = diceSimilarity(normText, norm);
-      if (fuzzy > 0.55 && (!best || fuzzy > best.score)) {
+      if (fuzzy > minFuzzy && (!best || fuzzy > best.score)) {
         best = { field, type: 'fuzzy_target', score: fuzzy };
+      }
+      // 模板比對：規格文案含 {變數} 時把變數當萬用字元，比對代入實際值後的頁面文字
+      const tpl = templateScore(normText, norm);
+      if (tpl > minFuzzy && (!best || tpl > best.score)) {
+        best = { field, type: tpl >= 0.9 ? 'template_target' : 'fuzzy_target', score: tpl };
       }
     }
 
@@ -266,7 +278,7 @@ function findMatches(selected, entries) {
   }
 
   results.sort((a, b) => b.matchScore - a.matchScore);
-  return results.slice(0, 8);
+  return results.slice(0, limit);
 }
 
 /** 字元 bigram 的 Dice 相似度（0~1），中英文皆適用；長度 <2 的字串只比完全相等。 */
@@ -289,6 +301,25 @@ function diceSimilarity(a, b) {
     if (mb.has(g)) overlap += Math.min(c, mb.get(g));
   }
   return (2 * overlap) / (a.length - 1 + b.length - 1);
+}
+
+/**
+ * 模板句比對：規格文案的 {變數}（如 {Amount}{幣別符號}）視為萬用字元。
+ * 整句符合回 0.9；不符合時退回「拿掉變數後的字面部分」的模糊相似度。
+ * 非模板句（不含 {}）回 0。
+ */
+function templateScore(normText, norm) {
+  if (!/\{[^{}]*\}/.test(normText)) return 0;
+  const parts = normText.split(/\{[^{}]*\}/);
+  const literals = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (literals.length < 2) return 0; // 幾乎整句都是變數，比對無意義
+  const re = new RegExp('^' + parts.map(escapeRegExp).join('.*?') + '$');
+  if (re.test(norm)) return 0.9;
+  return diceSimilarity(literals, norm);
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function partialScore(a, b) {

@@ -67,7 +67,8 @@ function doSearch() {
 
   searchResults.innerHTML = '<div class="searching">查詢中…</div>';
 
-  chrome.runtime.sendMessage({ action: 'checkTranslation', text }, res => {
+  // loose：手動查詢用寬鬆門檻（短關鍵字也能命中）
+  chrome.runtime.sendMessage({ action: 'checkTranslation', text, loose: true }, res => {
     if (!res || res.error) {
       searchResults.innerHTML = `<div class="error">${res?.error === 'NOT_CONFIGURED' ? '請先完成設定' : (res?.error || '查詢失敗')}</div>`;
       return;
@@ -77,8 +78,8 @@ function doSearch() {
       return;
     }
     searchResults.innerHTML = res.results.map(r => {
-      const icons = { exact_target: '✅', partial_target: '🟡', fuzzy_target: '🟣' };
-      const labels = { exact_target: '完全符合', partial_target: '部分符合', fuzzy_target: '相似' };
+      const icons = { exact_target: '✅', partial_target: '🟡', fuzzy_target: '🟣', template_target: '🧩' };
+      const labels = { exact_target: '完全符合', partial_target: '部分符合', fuzzy_target: '相似', template_target: '模板符合' };
       return `
         <div class="result-card">
           <div class="result-header">
