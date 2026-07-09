@@ -15,15 +15,13 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     cacheTimestamp = null;
     resolvedTableId = null;
     resolvedTableType = null;
-    sendResponse({ success: true });
+    handleRefresh(sendResponse);
     return true;
   }
   if (req.action === 'getStatus') {
     getSettings().then(s => {
       sendResponse({
-        configured: !!(s.notionToken && (s.tableId || s.databaseId)),
-        cacheLoaded: !!cache,
-        cacheSize: cache ? cache.length : 0
+        configured: !!(s.notionToken && (s.tableId || s.databaseId))
       });
     });
     return true;
@@ -34,6 +32,20 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 });
 
+/** 清空快取後立即重抓 Notion，回傳筆數讓 popup 顯示回饋。 */
+async function handleRefresh(sendResponse) {
+  try {
+    const settings = await getSettings();
+    if (!settings.notionToken || (!settings.tableId && !settings.databaseId)) {
+      sendResponse({ error: 'NOT_CONFIGURED' }); return;
+    }
+    const entries = await getTranslations(settings);
+    sendResponse({ success: true, totalEntries: entries.length });
+  } catch (err) {
+    sendResponse({ error: err.message || 'Unknown error' });
+  }
+}
+
 async function handleCheck(text, sendResponse) {
   try {
     const settings = await getSettings();
@@ -41,7 +53,7 @@ async function handleCheck(text, sendResponse) {
       sendResponse({ error: 'NOT_CONFIGURED' }); return;
     }
     const entries = await getTranslations(settings);
-    const results = findMatches(text, entries, settings);
+    const results = findMatches(text, entries);
     sendResponse({ success: true, results, totalEntries: entries.length });
   } catch (err) {
     sendResponse({ error: err.message || 'Unknown error' });
@@ -51,7 +63,7 @@ async function handleCheck(text, sendResponse) {
 function getSettings() {
   return new Promise(resolve => {
     chrome.storage.sync.get(
-      ['notionToken', 'databaseId', 'tableId', 'tableType', 'sourceField', 'targetFields'],
+      ['notionToken', 'databaseId', 'tableId', 'tableType', 'targetFields'],
       resolve
     );
   });
@@ -67,7 +79,7 @@ async function getTranslations(settings) {
 }
 
 async function fetchAllEntries(settings) {
-  const { notionToken, tableId, tableType, databaseId: legacyId, sourceField = '', targetFields = [] } = settings;
+  const { notionToken, tableId, tableType, databaseId: legacyId, targetFields = [] } = settings;
 
   // Use saved resolved table info if available, otherwise resolve
   if (!resolvedTableId) {
@@ -84,9 +96,9 @@ async function fetchAllEntries(settings) {
 
   if (resolvedTableType === 'simple_table') {
     const pageId = (settings.databaseId || '').replace(/-/g, '');
-    return fetchSimpleTableRows(notionToken, resolvedTableId, pageId, sourceField, targetFields);
+    return fetchSimpleTableRows(notionToken, resolvedTableId, pageId, targetFields);
   } else {
-    return fetchDatabaseRows(notionToken, resolvedTableId, sourceField, targetFields);
+    return fetchDatabaseRows(notionToken, resolvedTableId, targetFields);
   }
 }
 
@@ -119,7 +131,7 @@ async function resolveDataSource(token, id) {
 
 // ── Simple Table (Notion table block) ──────────────────────────────────────
 
-async function fetchSimpleTableRows(token, tableId, pageId, sourceField, targetFields) {
+async function fetchSimpleTableRows(token, tableId, pageId, targetFields) {
   const apiHeaders = { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' };
   const entries = [];
   let headers = null;
@@ -147,19 +159,16 @@ async function fetchSimpleTableRows(token, tableId, pageId, sourceField, targetF
       const rowData = {};
       cells.forEach((val, i) => { if (headers[i]) rowData[headers[i]] = val; });
 
-      const source = sourceField ? (rowData[sourceField] || '') : '';
-      const fieldsToUse = targetFields.length > 0
-        ? targetFields
-        : headers.filter(h => h && h !== sourceField);
+      const fieldsToUse = targetFields.length > 0 ? targetFields : headers.filter(Boolean);
 
       const translations = {};
       for (const f of fieldsToUse) {
         if (rowData[f]) translations[f] = rowData[f];
       }
 
-      if (source || Object.keys(translations).length > 0) {
+      if (Object.keys(translations).length > 0) {
         const url = pageId ? `https://www.notion.so/${pageId}` : '';
-        entries.push({ id: row.id, source, translations, url });
+        entries.push({ id: row.id, translations, url });
       }
     }
     cursor = json.has_more ? json.next_cursor : null;
@@ -170,7 +179,7 @@ async function fetchSimpleTableRows(token, tableId, pageId, sourceField, targetF
 
 // ── Database (child_database) ───────────────────────────────────────────────
 
-async function fetchDatabaseRows(token, dbId, sourceField, targetFields) {
+async function fetchDatabaseRows(token, dbId, targetFields) {
   const entries = [];
   let cursor;
 
@@ -196,7 +205,7 @@ async function fetchDatabaseRows(token, dbId, sourceField, targetFields) {
 
     const json = await res.json();
     for (const page of json.results) {
-      const entry = extractDatabaseEntry(page, sourceField, targetFields);
+      const entry = extractDatabaseEntry(page, targetFields);
       if (entry) entries.push(entry);
     }
     cursor = json.has_more ? json.next_cursor : null;
@@ -205,24 +214,16 @@ async function fetchDatabaseRows(token, dbId, sourceField, targetFields) {
   return entries;
 }
 
-function extractDatabaseEntry(page, sourceField, targetFields) {
+function extractDatabaseEntry(page, targetFields) {
   const props = page.properties;
-  const source = (sourceField && extractPropText(props[sourceField])) || extractTitleText(props);
   const fieldsToUse = targetFields.length > 0 ? targetFields : Object.keys(props);
   const translations = {};
   for (const f of fieldsToUse) {
     const val = extractPropText(props[f]);
     if (val) translations[f] = val;
   }
-  if (!source && Object.keys(translations).length === 0) return null;
-  return { id: page.id, source: source || '', translations, url: page.url };
-}
-
-function extractTitleText(props) {
-  for (const key of Object.keys(props)) {
-    if (props[key].type === 'title') return props[key].title.map(t => t.plain_text).join('');
-  }
-  return '';
+  if (Object.keys(translations).length === 0) return null;
+  return { id: page.id, translations, url: page.url };
 }
 
 function extractPropText(prop) {
@@ -238,18 +239,11 @@ function extractPropText(prop) {
 
 // ── Matching ────────────────────────────────────────────────────────────────
 
-function findMatches(selected, entries, settings) {
+function findMatches(selected, entries) {
   const norm = normalizeText(selected);
   const results = [];
 
   for (const entry of entries) {
-    const normSource = normalizeText(entry.source);
-
-    if (normSource === norm) {
-      results.push({ ...entry, matchField: settings.sourceField || '原文', matchType: 'exact_source', matchScore: 0.95 });
-      continue;
-    }
-
     let best = null;
     for (const [field, text] of Object.entries(entry.translations)) {
       const normText = normalizeText(text);
@@ -261,11 +255,11 @@ function findMatches(selected, entries, settings) {
       if (score > 0.5 && (!best || score > best.score)) {
         best = { field, type: 'partial_target', score };
       }
-    }
-
-    if (!best) {
-      const score = partialScore(normSource, norm);
-      if (score > 0.5) best = { field: settings.sourceField || '原文', type: 'partial_source', score };
+      // 模糊比對：非包含關係但用字高度相似（改寫、標點差異、插值變數）
+      const fuzzy = diceSimilarity(normText, norm);
+      if (fuzzy > 0.55 && (!best || fuzzy > best.score)) {
+        best = { field, type: 'fuzzy_target', score: fuzzy };
+      }
     }
 
     if (best) results.push({ ...entry, matchField: best.field, matchType: best.type, matchScore: best.score });
@@ -273,6 +267,28 @@ function findMatches(selected, entries, settings) {
 
   results.sort((a, b) => b.matchScore - a.matchScore);
   return results.slice(0, 8);
+}
+
+/** 字元 bigram 的 Dice 相似度（0~1），中英文皆適用；長度 <2 的字串只比完全相等。 */
+function diceSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const bigrams = (s) => {
+    const m = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) || 0) + 1);
+    }
+    return m;
+  };
+  const ma = bigrams(a);
+  const mb = bigrams(b);
+  let overlap = 0;
+  for (const [g, c] of ma) {
+    if (mb.has(g)) overlap += Math.min(c, mb.get(g));
+  }
+  return (2 * overlap) / (a.length - 1 + b.length - 1);
 }
 
 function partialScore(a, b) {

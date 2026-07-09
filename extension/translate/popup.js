@@ -1,7 +1,5 @@
 const dotConfig = document.getElementById('dot-config');
 const textConfig = document.getElementById('text-config');
-const dotCache   = document.getElementById('dot-cache');
-const textCache  = document.getElementById('text-cache');
 const toggleSelect = document.getElementById('toggle-select');
 const toggleHover = document.getElementById('toggle-hover');
 const toggleClick = document.getElementById('toggle-click');
@@ -18,14 +16,6 @@ chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
   } else {
     dotConfig.className = 'status-dot dot-warn';
     textConfig.textContent = '尚未設定 Notion';
-  }
-
-  if (res.cacheLoaded) {
-    dotCache.className = 'status-dot dot-ok';
-    textCache.textContent = `快取已載入（${res.cacheSize} 筆）`;
-  } else {
-    dotCache.className = 'status-dot dot-off';
-    textCache.textContent = '快取未載入';
   }
 });
 
@@ -45,21 +35,20 @@ toggleClick.addEventListener('change', () => {
   chrome.storage.sync.set({ clickMode: toggleClick.checked });
 });
 
-// Refresh cache
+// Refresh cache（background 會清空快取並立即重抓，回傳筆數）
 document.getElementById('btn-refresh').addEventListener('click', () => {
   const btn = document.getElementById('btn-refresh');
   btn.disabled = true;
   btn.textContent = '載入中…';
 
-  chrome.runtime.sendMessage({ action: 'refreshCache' }, () => {
-    chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
-      if (res?.cacheLoaded) {
-        dotCache.className = 'status-dot dot-ok';
-        textCache.textContent = `快取已載入（${res.cacheSize} 筆）`;
-      }
-      btn.disabled = false;
-      btn.textContent = '🔄 重新抓取 Notion 更新';
-    });
+  chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
+    btn.disabled = false;
+    btn.textContent = '🔄 重新抓取 Notion 更新';
+    if (res?.success) {
+      showPopupToast(`✅ 已重新載入 ${res.totalEntries} 筆`, 'success');
+    } else {
+      showPopupToast(res?.error === 'NOT_CONFIGURED' ? '請先完成設定' : `❌ ${res?.error || '載入失敗'}`, 'error');
+    }
   });
 });
 
@@ -88,8 +77,8 @@ function doSearch() {
       return;
     }
     searchResults.innerHTML = res.results.map(r => {
-      const icons = { exact_target: '✅', exact_source: '🔵', partial_target: '🟡', partial_source: '🟠' };
-      const labels = { exact_target: '完全符合', exact_source: '原文符合', partial_target: '部分符合', partial_source: '原文部分' };
+      const icons = { exact_target: '✅', partial_target: '🟡', fuzzy_target: '🟣' };
+      const labels = { exact_target: '完全符合', partial_target: '部分符合', fuzzy_target: '相似' };
       return `
         <div class="result-card">
           <div class="result-header">
@@ -97,8 +86,11 @@ function doSearch() {
             <span class="score">${Math.round(r.matchScore * 100)}%</span>
             <a href="${r.url}" target="_blank" class="notion-link">↗</a>
           </div>
-          <div class="field"><span class="lbl">原文</span>${esc(r.source)}</div>
-          <div class="field"><span class="lbl">譯文</span><strong>${esc(r.target)}</strong></div>
+          ${Object.entries(r.translations || {})
+            .sort(([a], [b]) => (b === r.matchField) - (a === r.matchField))
+            .map(([lang, text]) =>
+              `<div class="field"><span class="lbl">${esc(lang)}</span><strong>${esc(text)}</strong></div>`
+            ).join('')}
         </div>`;
     }).join('');
   });
@@ -114,7 +106,6 @@ function esc(s) {
 
 let popupNotionToken   = '';
 let popupSelectedTable = null;
-let popupSavedSource   = '';
 let popupSavedTargets  = [];
 
 const popupDbIdInput    = document.getElementById('popup-database-id');
@@ -128,17 +119,15 @@ const popupDiagTitle    = document.getElementById('popup-diag-title');
 const popupDiagBody     = document.getElementById('popup-diag-body');
 const popupFieldEmpty   = document.getElementById('popup-field-mapping-empty');
 const popupFieldSelects = document.getElementById('popup-field-mapping-selects');
-const popupSourceSelect = document.getElementById('popup-source-field');
 const popupTargetList   = document.getElementById('popup-target-fields-list');
 const popupFieldHint    = document.getElementById('popup-field-hint');
 const popupToastEl      = document.getElementById('popup-toast');
 const popupTokenWarn    = document.getElementById('popup-token-warn');
 
 chrome.storage.sync.get(
-  ['notionToken', 'databaseId', 'tableId', 'tableType', 'sourceField', 'targetFields'],
+  ['notionToken', 'databaseId', 'tableId', 'tableType', 'targetFields'],
   async s => {
     popupNotionToken  = s.notionToken  || '';
-    popupSavedSource  = s.sourceField  || '';
     popupSavedTargets = s.targetFields || [];
 
     if (!popupNotionToken) popupTokenWarn.style.display = 'block';
@@ -211,51 +200,31 @@ popupBtnTest.addEventListener('click', async () => {
 
 popupBtnSave.addEventListener('click', () => {
   const rawId        = extractId(popupDbIdInput.value.trim());
-  const sourceField  = popupSourceSelect.value;
   const targetFields = [...popupTargetList.querySelectorAll('.target-field-cb:checked')].map(cb => cb.value);
 
   if (!popupNotionToken)   { showPopupToast('請先在設定頁面填入 Notion Token', 'error'); return; }
   if (!rawId)              { showPopupToast('請填入 Page/Database ID', 'error'); return; }
   if (!popupSelectedTable) { showPopupToast('請先測試連線並選擇表格', 'error'); return; }
-  if (!sourceField)        { showPopupToast('請選擇原文欄位', 'error'); return; }
   if (!targetFields.length){ showPopupToast('請至少勾選一個語言欄位', 'error'); return; }
 
   chrome.storage.sync.set({
     databaseId:  rawId,
     tableId:     popupSelectedTable.id,
     tableType:   popupSelectedTable.type,
-    sourceField,
     targetFields
   }, () => {
-    popupSavedSource  = sourceField;
     popupSavedTargets = targetFields;
-    chrome.runtime.sendMessage({ action: 'refreshCache' }, () => {
-      chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
-        if (res?.cacheLoaded) {
-          dotCache.className    = 'status-dot dot-ok';
-          textCache.textContent = `快取已載入（${res.cacheSize} 筆）`;
-        }
-        if (res?.configured) {
-          dotConfig.className    = 'status-dot dot-ok';
-          textConfig.textContent = 'Notion 已設定';
-        }
-      });
+    dotConfig.className    = 'status-dot dot-ok';
+    textConfig.textContent = 'Notion 已設定';
+    chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
+      if (res?.success) showPopupToast(`✅ 設定已儲存，載入 ${res.totalEntries} 筆`, 'success');
+      else showPopupToast(`✅ 設定已儲存（載入失敗：${res?.error || '未知錯誤'}）`, 'error');
     });
-    showPopupToast('✅ 設定已儲存', 'success');
   });
 });
 
 function populatePopupFieldSelects(columns) {
   if (!columns.length) { showPopupToast('⚠️ 此表格沒有任何欄位', 'error'); return; }
-
-  const guessSource = popupSavedSource ||
-    columns.find(c => /原文|zh.?tw|source|繁體/i.test(c)) ||
-    columns[0];
-
-  popupSourceSelect.innerHTML = columns.map(c =>
-    `<option value="${esc(c)}" ${c === guessSource ? 'selected' : ''}>${esc(c)}</option>`
-  ).join('');
-  popupSourceSelect.disabled = false;
 
   const defaultChecked = popupSavedTargets.length > 0 ? popupSavedTargets : columns;
   popupTargetList.innerHTML = columns.map(c => {
@@ -273,8 +242,6 @@ function populatePopupFieldSelects(columns) {
 }
 
 function resetPopupFieldSelects() {
-  popupSourceSelect.innerHTML     = '';
-  popupSourceSelect.disabled      = true;
   popupTargetList.innerHTML       = '';
   popupFieldEmpty.style.display   = 'flex';
   popupFieldSelects.style.display = 'none';

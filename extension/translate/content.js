@@ -101,6 +101,16 @@ function checkHover(el, x, y) {
 }
 
 function extractHoverText(el) {
+  // 輸入框的提示文字在 placeholder 屬性、不在 textContent，需另外讀取
+  if (el.matches && el.matches('input, textarea')) {
+    const ph = !el.value ? (el.placeholder || '').trim() : '';
+    if (ph) return ph;
+    // 唯讀/停用的輸入框顯示的是固定 UI 文案（非使用者輸入），也納入比對
+    if (el.readOnly || el.disabled) {
+      const v = (el.value || '').trim().replace(/\s+/g, ' ');
+      if (v.length >= 2 && v.length <= HOVER_TEXT_MAX) return v;
+    }
+  }
   let node = el;
   for (let i = 0; i < 4 && node && node !== document.body; i++) {
     const title = node.getAttribute && node.getAttribute('title');
@@ -297,8 +307,10 @@ function renderResults(selected, res) {
     const pct = Math.round(r.matchScore * 100);
     const isExact = r.matchType.startsWith('exact');
 
-    // Build multi-language translation rows
-    const langRows = Object.entries(r.translations || {}).map(([lang, text]) => {
+    // Build multi-language translation rows（命中的語言排最上面，免得要捲動找）
+    const langRows = Object.entries(r.translations || {})
+      .sort(([a], [b]) => (b === r.matchField) - (a === r.matchField))
+      .map(([lang, text]) => {
       const isMatchedField = lang === r.matchField;
       const diffHtml = (!isExact && isMatchedField)
         ? `<span class="tc-diff-inline">${diffSpan(selected, text)}</span>`
@@ -319,10 +331,6 @@ function renderResults(selected, res) {
           <span class="tc-score">${pct}%</span>
           ${r.url ? `<a class="tc-notion-btn" href="${r.url}" target="_blank" title="在 Notion 中查看">↗</a>` : ''}
         </div>
-        <div class="tc-field tc-field-source">
-          <span class="tc-label">原文</span>
-          <span>${esc(r.source)}</span>
-        </div>
         <div class="tc-langs">${langRows}</div>
       </div>`;
   }).join('');
@@ -336,8 +344,8 @@ function renderResults(selected, res) {
 function matchMeta(type) {
   switch (type) {
     case 'exact_target':   return { cls: 'tc-exact',   label: '完全符合', icon: '✅' };
-    case 'exact_source':   return { cls: 'tc-source',  label: '原文符合', icon: '🔵' };
     case 'partial_target': return { cls: 'tc-partial', label: '部分符合', icon: '🟡' };
+    case 'fuzzy_target':   return { cls: 'tc-fuzzy',   label: '相似',     icon: '🟣' };
     default:               return { cls: 'tc-partial', label: '部分符合', icon: '🟠' };
   }
 }

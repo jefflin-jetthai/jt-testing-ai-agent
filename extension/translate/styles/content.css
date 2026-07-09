@@ -130,8 +130,8 @@
 }
 
 .tc-exact  .tc-match-label { color: #1a7f37; }
-.tc-source .tc-match-label { color: #0969da; }
 .tc-partial .tc-match-label { color: #9a6700; }
+.tc-fuzzy  .tc-match-label { color: #8250df; }
 
 .tc-score {
   font-size: 11px;
@@ -143,8 +143,8 @@
 }
 
 .tc-exact   .tc-score { background: #dafbe1; color: #1a7f37; }
-.tc-source  .tc-score { background: #ddf4ff; color: #0969da; }
 .tc-partial .tc-score { background: #fff8c5; color: #9a6700; }
+.tc-fuzzy   .tc-score { background: #fbefff; color: #8250df; }
 
 .tc-notion-btn {
   font-size: 12px;
@@ -165,12 +165,6 @@
   font-size: 12.5px;
   padding: 2px 4px;
   border-radius: 4px;
-}
-
-.tc-field-source {
-  margin-bottom: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #f0f0f0;
 }
 
 .tc-field-matched {
