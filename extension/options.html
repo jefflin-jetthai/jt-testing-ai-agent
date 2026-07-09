@@ -57,7 +57,10 @@
 
       <div class="field">
         <label for="notion-token">Notion Integration Token</label>
-        <input id="notion-token" type="password" placeholder="secret_xxx 或 ntn_xxx" />
+        <div class="input-row">
+          <input id="notion-token" type="password" placeholder="secret_xxx 或 ntn_xxx" />
+          <button id="toggle-token" style="background: #3a3a3a; white-space: nowrap" title="顯示/隱藏 token">顯示</button>
+        </div>
         <div class="hint">
           在 notion.so/my-integrations 建立 internal integration，並把測試案例頁面分享給它。
         </div>

@@ -303,6 +303,7 @@ async function connect() {
       running = false;
       exporting = false;
       currentRunId = null;
+      setTranslateSuspended(false); // 連線中斷 = run 無法繼續，恢復翻譯比對
     }
     updateActionButtons();
     updateStopBridgeBtn();
@@ -333,6 +334,12 @@ let attaching = false; // attach 模式：接管/解除進行中
 let chromeReady = false; // remote 模式：測試用 Chrome 是否已啟動
 let running = false; // 測試執行中
 let exporting = false; // 匯出 pytest 中
+
+/** 測試執行中暫停翻譯比對面板（translate/content.js 讀此旗標），避免面板彈出干擾操作與錄影。 */
+function setTranslateSuspended(v) {
+  chrome.storage.local.set({ tcSuspended: v });
+}
+setTranslateSuspended(false); // side panel 開啟時重置，避免上次異常結束後旗標卡住
 // 各 agent 的 model，bridge 連線後由 config.describe 帶回
 const agentModels = { claude: "opus", codex: "(codex 預設)", antigravity: "(CLI 預設)" };
 
@@ -476,6 +483,7 @@ function handleEvent(msg) {
       else logLine(p.cancelled ? "◼ 已中止測試" : "◼ 全部測試完成", p.cancelled ? "tool" : "ok");
       currentRunId = null;
       running = false;
+      setTranslateSuspended(false);
       updateActionButtons();
       updateStopBridgeBtn();
       break;
@@ -677,6 +685,19 @@ $("btn-select-all").addEventListener("click", () => setAllCases(true));
 $("btn-deselect-all").addEventListener("click", () => setAllCases(false));
 $("cases").addEventListener("change", updateCasesCount);
 $("btn-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+// 頂部 TAB：AI 測試 / 翻譯比對。翻譯比對頁（iframe）首次切換才載入，
+// 避免每次開 side panel 都觸發它的 Notion 欄位讀取。
+for (const btn of document.querySelectorAll(".tabs .tab")) {
+  btn.addEventListener("click", () => {
+    const tab = btn.dataset.tab;
+    for (const b of document.querySelectorAll(".tabs .tab")) b.classList.toggle("active", b === btn);
+    $("tab-testing").style.display = tab === "testing" ? "" : "none";
+    $("tab-translate").style.display = tab === "translate" ? "" : "none";
+    const frame = $("translate-frame");
+    if (tab === "translate" && !frame.src) frame.src = frame.dataset.src;
+  });
+}
 $("btn-run").addEventListener("click", async () => {
   const cases = selectedCases();
   if (!cases.length) return logLine("請先勾選測試案例", "err");
@@ -684,6 +705,7 @@ $("btn-run").addEventListener("click", async () => {
   logLine(`接管當前分頁執行 ${cases.length} 個案例 → ${tab?.url || "(未知分頁)"}`, "tool");
   $("results").innerHTML = "";
   running = true;
+  setTranslateSuspended(true);
   updateActionButtons();
   updateStopBridgeBtn();
   try {
@@ -702,6 +724,7 @@ $("btn-run").addEventListener("click", async () => {
   } catch (e) {
     logLine(`啟動失敗：${e.message}`, "err");
     running = false;
+    setTranslateSuspended(false);
     updateActionButtons();
     updateStopBridgeBtn();
   }

@@ -14,6 +14,32 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
+/* 頂部分頁：AI 測試 / 翻譯比對 */
+.tabs {
+  display: flex;
+  background: #181818;
+  border-bottom: 1px solid var(--border);
+}
+.tabs .tab {
+  flex: 1;
+  padding: 9px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.tabs .tab:hover { color: var(--fg); }
+.tabs .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+#translate-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 37px); /* 扣掉 tab 列高度 */
+  border: 0;
+  background: #fff;
+}
 header {
   display: flex;
   align-items: center;

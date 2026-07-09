@@ -3,7 +3,10 @@
  * - 點工具列圖示開啟 side panel。
  * - 「接管當前分頁」(實驗)：chrome.debugger attach 當前分頁，並把 CDP 透過
  *   WebSocket relay 到 bridge 的 /cdp-relay，讓 chrome-devtools-mcp 能驅動此分頁。
+ * - 翻譯規格比對（整合自 chrome-traslate-compare-plugin）：訊息用 req.action 區分，
+ *   與本檔的 msg.cmd 不衝突，兩組 listener 並存。
  */
+import "./translate/background.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel?.setPanelBehavior) {

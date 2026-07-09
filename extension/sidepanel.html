@@ -7,6 +7,12 @@
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
+    <nav class="tabs">
+      <button class="tab active" id="tab-btn-testing" data-tab="testing">🧪 AI 測試</button>
+      <button class="tab" id="tab-btn-translate" data-tab="translate" title="選取網頁文字即比對 Notion 翻譯規格">🔍 翻譯比對</button>
+    </nav>
+
+    <div id="tab-testing">
     <header>
       <h1>JT Testing AI Agent</h1>
       <div class="conn">
@@ -111,6 +117,12 @@
       </div>
       <div id="export-files" class="meta" style="margin: 8px 0"></div>
     </section>
+    </div>
+
+    <div id="tab-translate" style="display: none">
+      <!-- 翻譯規格比對工具（整合自 chrome-traslate-compare-plugin）；切到此分頁才載入 -->
+      <iframe id="translate-frame" data-src="translate/popup.html" title="翻譯規格比對"></iframe>
+    </div>
 
     <script type="module" src="sidepanel.js"></script>
   </body>

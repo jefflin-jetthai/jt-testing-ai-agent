@@ -15,6 +15,13 @@ chrome.storage.sync.get(
   },
 );
 
+$("toggle-token").addEventListener("click", () => {
+  const input = $("notion-token");
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  $("toggle-token").textContent = show ? "隱藏" : "顯示";
+});
+
 $("save").addEventListener("click", () => {
   chrome.storage.sync.set(
     {

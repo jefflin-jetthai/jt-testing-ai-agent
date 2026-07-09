@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>翻譯規格比對工具</title>
+  <link rel="stylesheet" href="styles/popup.css">
+</head>
+<body>
+  <div class="popup-header">
+    <span class="logo">🔍</span>
+    <span class="title">翻譯規格比對</span>
+  </div>
+
+  <div class="status-section">
+    <div class="status-row" id="status-config">
+      <span class="status-dot" id="dot-config"></span>
+      <span class="status-text" id="text-config">載入中…</span>
+    </div>
+    <div class="status-row" id="status-cache">
+      <span class="status-dot" id="dot-cache"></span>
+      <span class="status-text" id="text-cache">快取未載入</span>
+    </div>
+  </div>
+
+  <div class="toggle-section">
+    <div class="toggle-text">
+      <span class="toggle-label">選取比對模式</span>
+      <span class="toggle-hint">選取網頁文字即比對</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggle-select">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-section">
+    <div class="toggle-text">
+      <span class="toggle-label">懸停比對模式</span>
+      <span class="toggle-hint">滑鼠停留即比對，免選取</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggle-hover">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-section">
+    <div class="toggle-text">
+      <span class="toggle-label">點擊比對模式</span>
+      <span class="toggle-hint">點擊文字即比對，適合點開式提示</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggle-click">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="search-section">
+    <input type="text" id="search-input" class="search-input" placeholder="手動輸入文字查詢…">
+    <button id="btn-search" class="btn-primary">查詢</button>
+  </div>
+
+  <div id="search-results" class="search-results"></div>
+
+  <div class="notion-config-section">
+    <div class="section-divider">Notion 連線設定</div>
+    <div class="config-body">
+
+      <div class="token-warn" id="popup-token-warn" style="display:none">
+        ⚠️ 請先前往 <strong>⚙️ 設定</strong> 填入 Notion Integration Token
+      </div>
+
+      <div class="field-group-sm">
+        <label class="label-sm" for="popup-database-id">Page / Database URL 或 ID</label>
+        <div class="input-row-sm">
+          <input type="text" id="popup-database-id" class="input-sm" placeholder="Notion 頁面或資料庫 URL/ID">
+          <button type="button" class="btn-icon-sm" id="popup-btn-clear-db" title="清除">✕</button>
+        </div>
+      </div>
+
+      <div class="db-picker-sm" id="popup-db-picker" style="display:none">
+        <p class="picker-label-sm">找到多個表格，請選擇：</p>
+        <div id="popup-db-picker-list" class="picker-list-sm"></div>
+      </div>
+
+      <div class="diag-box-sm" id="popup-diag-box" style="display:none">
+        <div class="diag-title-sm" id="popup-diag-title"></div>
+        <div class="diag-body-sm" id="popup-diag-body"></div>
+      </div>
+
+      <div class="field-mapping-empty-sm" id="popup-field-mapping-empty">
+        <span class="empty-icon-sm">🔌</span>
+        <span>請先測試連線，欄位清單將自動帶入</span>
+      </div>
+
+      <div id="popup-field-mapping-selects" style="display:none">
+        <div class="field-group-sm">
+          <label class="label-sm" for="popup-source-field">原文欄位</label>
+          <select id="popup-source-field" class="select-sm" disabled></select>
+        </div>
+        <div class="field-group-sm">
+          <label class="label-sm">語言欄位（多選）</label>
+          <div id="popup-target-fields-list" class="checkbox-list-sm"></div>
+        </div>
+        <div id="popup-field-hint" class="field-hint-sm"></div>
+      </div>
+
+      <div class="config-actions-sm">
+        <button type="button" id="popup-btn-test" class="btn-secondary">🔌 測試連線</button>
+        <button type="button" id="popup-btn-save" class="btn-primary">💾 儲存</button>
+      </div>
+
+      <div id="popup-toast" style="display:none" class="toast-sm"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button id="btn-refresh" class="btn-secondary">🔄 重新抓取 Notion 更新</button>
+    <button id="btn-options" class="btn-secondary">⚙️ 設定</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
