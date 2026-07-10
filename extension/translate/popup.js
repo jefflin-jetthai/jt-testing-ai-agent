@@ -1,5 +1,7 @@
 const dotConfig = document.getElementById('dot-config');
 const textConfig = document.getElementById('text-config');
+const dotBridge = document.getElementById('dot-bridge');
+const textBridge = document.getElementById('text-bridge');
 const toggleSelect = document.getElementById('toggle-select');
 const toggleHover = document.getElementById('toggle-hover');
 const toggleClick = document.getElementById('toggle-click');
@@ -19,6 +21,25 @@ chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
     textConfig.textContent = '尚未設定 Notion';
   }
 });
+
+// 圖片辨識 bridge 狀態（背景以 hello 探測 bridge 是否在線）
+// 開關預設 disabled（HTML），確認 bridge 在線才開放切換；
+// popup 開著期間定時輪詢，bridge 啟動/關閉時燈號與開關即時跟著更新
+function checkBridgeStatus() {
+  chrome.runtime.sendMessage({ action: 'getBridgeStatus' }, res => {
+    if (res?.connected) {
+      dotBridge.className = 'status-dot dot-ok';
+      textBridge.textContent = '圖片辨識 bridge 已連線';
+      toggleImageOcr.disabled = false;
+    } else {
+      dotBridge.className = 'status-dot dot-warn';
+      textBridge.textContent = '圖片辨識 bridge 未連線（需按 bridge 「連線」啟動）';
+      toggleImageOcr.disabled = true;
+    }
+  });
+}
+checkBridgeStatus();
+setInterval(checkBridgeStatus, 4000);
 
 // Toggle modes
 chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode', 'imageOcrMode'], s => {

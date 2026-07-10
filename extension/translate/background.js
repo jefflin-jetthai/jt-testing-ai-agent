@@ -34,6 +34,13 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     handleOcrImage(req.src, sendResponse);
     return true;
   }
+  if (req.action === 'getBridgeStatus') {
+    // 圖片辨識依賴 bridge：以 hello 短超時探測是否在線
+    callBridge('hello', {}, 3000)
+      .then(() => sendResponse({ connected: true }))
+      .catch(() => sendResponse({ connected: false }));
+    return true;
+  }
 });
 
 // ── 圖片文字辨識（經 bridge → claude 視覺）────────────────────────────────────
