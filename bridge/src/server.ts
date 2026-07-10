@@ -37,6 +37,7 @@ import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
 import { tabRelay, agentCapture } from "./attach.js";
+import { ocrImage } from "./ocr.js";
 import type { TestCase } from "./protocol.js";
 
 loadAtEnv();
@@ -252,6 +253,12 @@ async function handleRequest(req: WsRequest): Promise<WsResponse> {
 
       case "chrome.status":
         return { ...base, result: await chromeStatus() };
+
+      case "ocr.image": {
+        // 翻譯比對：辨識圖片中的文字（claude CLI 視覺）
+        const { dataUrl } = (req.payload as { dataUrl?: string }) ?? {};
+        return { ...base, result: await ocrImage(dataUrl ?? "") };
+      }
 
       // 註：Notion 讀取已移至 extension 端直接 fetch（參考 chrome-traslate-compare-plugin），bridge 不再經手。
       case "run.start": {

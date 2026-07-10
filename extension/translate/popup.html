@@ -16,6 +16,10 @@
       <span class="status-dot" id="dot-config"></span>
       <span class="status-text" id="text-config">載入中…</span>
     </div>
+    <div class="status-row" id="status-bridge">
+      <span class="status-dot" id="dot-bridge"></span>
+      <span class="status-text" id="text-bridge">檢查圖片辨識 bridge…</span>
+    </div>
   </div>
 
   <div class="toggle-section">
@@ -51,6 +55,17 @@
     </label>
   </div>
 
+  <div class="toggle-section">
+    <div class="toggle-text">
+      <span class="toggle-label">圖片文字比對</span>
+      <span class="toggle-hint">點擊圖片以 AI 辨識圖中文字（需 bridge 連線；開啟時點圖不會觸發連結）</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggle-image-ocr" disabled>
+      <span class="slider"></span>
+    </label>
+  </div>
+
   <div class="search-section">
     <input type="text" id="search-input" class="search-input" placeholder="手動輸入文字查詢…">
     <button id="btn-search" class="btn-primary">查詢</button>
@@ -70,6 +85,7 @@
         <label class="label-sm" for="popup-database-id">Page / Database URL 或 ID</label>
         <div class="input-row-sm">
           <input type="text" id="popup-database-id" class="input-sm" placeholder="Notion 頁面或資料庫 URL/ID">
+          <button type="button" class="btn-icon-sm" id="popup-btn-paste-db" title="貼上剪貼簿內容">📋</button>
           <button type="button" class="btn-icon-sm" id="popup-btn-clear-db" title="清除">✕</button>
         </div>
       </div>
@@ -85,8 +101,8 @@
       </div>
 
       <div class="field-mapping-empty-sm" id="popup-field-mapping-empty">
-        <span class="empty-icon-sm">🔌</span>
-        <span>請先測試連線，欄位清單將自動帶入</span>
+        <span class="empty-icon-sm">📥</span>
+        <span>請先按「讀取」，欄位清單將自動帶入</span>
       </div>
 
       <div id="popup-field-mapping-selects" style="display:none">
@@ -98,8 +114,9 @@
       </div>
 
       <div class="config-actions-sm">
-        <button type="button" id="popup-btn-test" class="btn-secondary">🔌 測試連線</button>
-        <button type="button" id="popup-btn-save" class="btn-primary">💾 儲存</button>
+        <button type="button" id="popup-btn-load" class="btn-primary">📥 讀取</button>
+        <button type="button" id="popup-btn-reread" class="btn-secondary" disabled title="清除快取、重新抓取 Notion 最新內容">🔄 重讀</button>
+        <button type="button" id="popup-btn-reset" class="btn-secondary" disabled title="清除表格與欄位設定（保留 Token）">重置</button>
       </div>
 
       <div id="popup-toast" style="display:none" class="toast-sm"></div>
@@ -107,7 +124,6 @@
   </div>
 
   <div class="footer">
-    <button id="btn-refresh" class="btn-secondary">🔄 重新抓取 Notion 更新</button>
     <button id="btn-options" class="btn-secondary">⚙️ 設定</button>
   </div>
 

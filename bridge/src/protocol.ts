@@ -16,6 +16,7 @@ export type RequestType =
   | "bridge.selfUpdate" // 下載新 bundle.cjs 覆蓋自身並重啟（打包版自動更新）
   | "chrome.launch" // 一鍵啟動測試用 Chrome（remote-debugging + 載入本 extension）
   | "chrome.status"
+  | "ocr.image" // 翻譯比對：辨識圖片中的文字（claude CLI 視覺），payload { dataUrl }
   | "run.start" // Phase 2：開始接管當前分頁執行（payload 帶 extension 已從 Notion 解析好的 TestCase）
   | "run.cancel"
   | "export.toPytest" // Phase 5
