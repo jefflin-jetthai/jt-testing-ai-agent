@@ -881,3 +881,9 @@ $("btn-export-cancel").addEventListener("click", async () => {
   applyModeUI(); // 依預設模式設定按鈕顯示 + 動作鈕狀態
   connect();
 })();
+
+// side panel 常駐不重載：設定頁存 token 後即時收/顯首次使用提示
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync' || !changes.notionToken) return;
+  $("first-hint").style.display = changes.notionToken.newValue ? "none" : "block";
+});

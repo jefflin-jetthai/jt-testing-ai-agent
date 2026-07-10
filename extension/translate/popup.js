@@ -10,17 +10,20 @@ const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 
 // Load initial status
-chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
-  if (!res) return;
+function refreshNotionStatus() {
+  chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
+    if (!res) return;
 
-  if (res.configured) {
-    dotConfig.className = 'status-dot dot-ok';
-    textConfig.textContent = 'Notion 已設定';
-  } else {
-    dotConfig.className = 'status-dot dot-warn';
-    textConfig.textContent = '尚未設定 Notion';
-  }
-});
+    if (res.configured) {
+      dotConfig.className = 'status-dot dot-ok';
+      textConfig.textContent = 'Notion 已設定';
+    } else {
+      dotConfig.className = 'status-dot dot-warn';
+      textConfig.textContent = '尚未設定 Notion';
+    }
+  });
+}
+refreshNotionStatus();
 
 // 圖片辨識 bridge 狀態（背景以 hello 探測 bridge 是否在線）
 // 開關預設 disabled（HTML），確認 bridge 在線才開放切換；
@@ -59,23 +62,6 @@ toggleClick.addEventListener('change', () => {
 });
 toggleImageOcr.addEventListener('change', () => {
   chrome.storage.sync.set({ imageOcrMode: toggleImageOcr.checked });
-});
-
-// Refresh cache（background 會清空快取並立即重抓，回傳筆數）
-document.getElementById('btn-refresh').addEventListener('click', () => {
-  const btn = document.getElementById('btn-refresh');
-  btn.disabled = true;
-  btn.textContent = '載入中…';
-
-  chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
-    btn.disabled = false;
-    btn.textContent = '🔄 重新抓取 Notion 更新';
-    if (res?.success) {
-      showPopupToast(`✅ 已重新載入 ${res.totalEntries} 筆`, 'success');
-    } else {
-      showPopupToast(res?.error === 'NOT_CONFIGURED' ? '請先完成設定' : `❌ ${res?.error || '載入失敗'}`, 'error');
-    }
-  });
 });
 
 // Open options
@@ -137,8 +123,9 @@ let popupSavedTargets  = [];
 
 const popupDbIdInput    = document.getElementById('popup-database-id');
 const popupBtnClearDb   = document.getElementById('popup-btn-clear-db');
-const popupBtnTest      = document.getElementById('popup-btn-test');
-const popupBtnSave      = document.getElementById('popup-btn-save');
+const popupBtnLoad      = document.getElementById('popup-btn-load');
+const popupBtnReread    = document.getElementById('popup-btn-reread');
+const popupBtnReset     = document.getElementById('popup-btn-reset');
 const popupDbPicker     = document.getElementById('popup-db-picker');
 const popupDbPickerList = document.getElementById('popup-db-picker-list');
 const popupDiagBox      = document.getElementById('popup-diag-box');
@@ -162,6 +149,7 @@ chrome.storage.sync.get(
 
     if (s.notionToken && s.tableId && s.tableType) {
       popupSelectedTable = { id: s.tableId, type: s.tableType, title: '' };
+      setPopupLoaded(true); // 已有設定 → 讀取鎖住、開放重讀/重置（同 AI 測試頁）
       try {
         const cols = await getTableColumns(s.notionToken, s.tableId, s.tableType);
         populatePopupFieldSelects(cols);
@@ -169,6 +157,30 @@ chrome.storage.sync.get(
     }
   }
 );
+
+// 本頁常駐於 side panel iframe，不會像 popup 每次重新載入；
+// 設定頁存 token（或其他設定變動）時由 storage.onChanged 即時帶入，免重開面板
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  if (changes.notionToken) {
+    popupNotionToken = changes.notionToken.newValue || '';
+    popupTokenWarn.style.display = popupNotionToken ? 'none' : 'block';
+  }
+  if (changes.targetFields) popupSavedTargets = changes.targetFields.newValue || [];
+  if (changes.notionToken || changes.databaseId || changes.tableId) refreshNotionStatus();
+});
+
+// 貼上：把剪貼簿內容填入 Notion URL/ID 輸入框（同 AI 測試頁）
+document.getElementById('popup-btn-paste-db').addEventListener('click', async () => {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) { showPopupToast('剪貼簿是空的', 'info'); return; }
+    popupDbIdInput.value = text;
+    popupDbIdInput.focus();
+  } catch (e) {
+    showPopupToast(`貼上失敗：${e.message}（可改用 Cmd+V）`, 'error');
+  }
+});
 
 popupBtnClearDb.addEventListener('click', () => {
   popupDbIdInput.value = '';
@@ -179,7 +191,36 @@ popupBtnClearDb.addEventListener('click', () => {
   popupDbIdInput.focus();
 });
 
-popupBtnTest.addEventListener('click', async () => {
+/** 讀取/重讀/重置 按鈕狀態（同 AI 測試頁：讀取成功後鎖讀取、開放重讀/重置）。 */
+function setPopupLoaded(loaded) {
+  popupBtnLoad.disabled   = loaded;
+  popupBtnReread.disabled = !loaded;
+  popupBtnReset.disabled  = !loaded;
+}
+
+/** 選定表格 → 讀欄位、預設勾選 → 直接寫入設定並載入資料（免兩段式儲存）。 */
+async function applyPopupTable(table, rawId) {
+  popupSelectedTable = table;
+  const cols = await getTableColumns(popupNotionToken, table.id, table.type);
+  populatePopupFieldSelects(cols);
+  const targetFields = [...popupTargetList.querySelectorAll('.target-field-cb:checked')].map(cb => cb.value);
+  popupSavedTargets = targetFields;
+  chrome.storage.sync.set({
+    databaseId:  rawId,
+    tableId:     table.id,
+    tableType:   table.type,
+    targetFields
+  }, () => {
+    chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
+      if (res?.success) showPopupToast(`✅ 已載入${table.title ? `「${esc(table.title)}」` : ''} ${res.totalEntries} 筆`, 'success');
+      else showPopupToast(`❌ 載入失敗：${res?.error || '未知錯誤'}`, 'error');
+    });
+  });
+  setPopupLoaded(true);
+}
+
+// 讀取：解析 URL/ID → 選定表格後直接生效（原「測試連線」+「儲存」合併為一步）
+popupBtnLoad.addEventListener('click', async () => {
   if (!popupNotionToken) {
     showPopupToast('請先在設定頁面填入 Notion Integration Token', 'error');
     return;
@@ -187,8 +228,8 @@ popupBtnTest.addEventListener('click', async () => {
   const rawId = extractId(popupDbIdInput.value.trim());
   if (!rawId) { showPopupToast('請填入 Page/Database ID', 'error'); return; }
 
-  popupBtnTest.disabled    = true;
-  popupBtnTest.textContent = '測試中…';
+  popupBtnLoad.disabled    = true;
+  popupBtnLoad.textContent = '讀取中…';
   popupDbPicker.style.display = 'none';
   popupDiagBox.style.display  = 'none';
   popupSelectedTable = null;
@@ -199,55 +240,66 @@ popupBtnTest.addEventListener('click', async () => {
 
     if (resolved.kind === 'direct_database') {
       popupDbIdInput.value = resolved.id;
-      popupSelectedTable = { id: resolved.id, type: 'database', title: getTitle(resolved.db.title) };
-      const cols = await getTableColumns(popupNotionToken, resolved.id, 'database');
-      populatePopupFieldSelects(cols);
-      showPopupToast(`✅ 連線成功！${esc(popupSelectedTable.title)}`, 'success');
-
-    } else if (resolved.kind === 'page') {
-      if (resolved.tables.length === 1) {
-        const t = resolved.tables[0];
-        popupSelectedTable = t;
-        const cols = await getTableColumns(popupNotionToken, t.id, t.type);
-        populatePopupFieldSelects(cols);
-        showPopupToast(`✅ 已自動選取「${esc(t.title)}」`, 'success');
-      } else {
-        showPopupTablePicker(popupNotionToken, resolved.tables);
-        showPopupToast(`找到 ${resolved.tables.length} 個表格，請選擇`, 'info');
-      }
+      await applyPopupTable({ id: resolved.id, type: 'database', title: getTitle(resolved.db.title) }, resolved.id);
+    } else if (resolved.tables.length === 1) {
+      await applyPopupTable(resolved.tables[0], rawId);
+    } else {
+      showPopupTablePicker(popupNotionToken, resolved.tables, rawId);
+      showPopupToast(`找到 ${resolved.tables.length} 個表格，請選擇`, 'info');
+      popupBtnLoad.disabled = false; // 等使用者點選表格
     }
   } catch (e) {
     showPopupDiag(e.message);
-    showPopupToast('❌ 連線失敗', 'error');
+    showPopupToast('❌ 讀取失敗', 'error');
+    setPopupLoaded(false);
   } finally {
-    popupBtnTest.disabled    = false;
-    popupBtnTest.textContent = '🔌 測試連線';
+    popupBtnLoad.textContent = '📥 讀取';
   }
 });
 
-popupBtnSave.addEventListener('click', () => {
-  const rawId        = extractId(popupDbIdInput.value.trim());
-  const targetFields = [...popupTargetList.querySelectorAll('.target-field-cb:checked')].map(cb => cb.value);
-
-  if (!popupNotionToken)   { showPopupToast('請先在設定頁面填入 Notion Token', 'error'); return; }
-  if (!rawId)              { showPopupToast('請填入 Page/Database ID', 'error'); return; }
-  if (!popupSelectedTable) { showPopupToast('請先測試連線並選擇表格', 'error'); return; }
-  if (!targetFields.length){ showPopupToast('請至少勾選一個語言欄位', 'error'); return; }
-
-  chrome.storage.sync.set({
-    databaseId:  rawId,
-    tableId:     popupSelectedTable.id,
-    tableType:   popupSelectedTable.type,
-    targetFields
-  }, () => {
-    popupSavedTargets = targetFields;
-    dotConfig.className    = 'status-dot dot-ok';
-    textConfig.textContent = 'Notion 已設定';
-    chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
-      if (res?.success) showPopupToast(`✅ 設定已儲存，載入 ${res.totalEntries} 筆`, 'success');
-      else showPopupToast(`✅ 設定已儲存（載入失敗：${res?.error || '未知錯誤'}）`, 'error');
-    });
+// 重讀：清除快取、以現有設定重新抓取 Notion 最新內容（原「重新抓取 Notion 更新」）
+popupBtnReread.addEventListener('click', () => {
+  popupBtnReread.disabled    = true;
+  popupBtnReread.textContent = '重讀中…';
+  chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
+    popupBtnReread.disabled    = false;
+    popupBtnReread.textContent = '🔄 重讀';
+    if (res?.success) showPopupToast(`✅ 已重新載入 ${res.totalEntries} 筆`, 'success');
+    else showPopupToast(res?.error === 'NOT_CONFIGURED' ? '請先完成設定' : `❌ ${res?.error || '載入失敗'}`, 'error');
   });
+});
+
+// 重置：清除表格與欄位設定（保留 Token），回到未設定狀態
+popupBtnReset.addEventListener('click', () => {
+  chrome.storage.sync.remove(['databaseId', 'tableId', 'tableType', 'targetFields'], () => {
+    popupSelectedTable = null;
+    popupSavedTargets  = [];
+    popupDbIdInput.value = '';
+    popupDbPicker.style.display = 'none';
+    popupDiagBox.style.display  = 'none';
+    resetPopupFieldSelects();
+    searchResults.innerHTML = '';
+    setPopupLoaded(false);
+    // 清空 background 快取（未設定狀態下回應必為錯誤，忽略）
+    chrome.runtime.sendMessage({ action: 'refreshCache' }, () => void chrome.runtime.lastError);
+    showPopupToast('已重置（Token 保留）', 'info');
+  });
+});
+
+// 勾選語言欄位即儲存並重載快取（debounce 避免連續勾選重複抓取）
+let popupFieldsTimer;
+popupTargetList.addEventListener('change', () => {
+  if (!popupSelectedTable) return;
+  const targetFields = [...popupTargetList.querySelectorAll('.target-field-cb:checked')].map(cb => cb.value);
+  if (!targetFields.length) showPopupToast('⚠️ 未勾選任何欄位，將比對全部欄位', 'info');
+  popupSavedTargets = targetFields;
+  chrome.storage.sync.set({ targetFields });
+  clearTimeout(popupFieldsTimer);
+  popupFieldsTimer = setTimeout(() => {
+    chrome.runtime.sendMessage({ action: 'refreshCache' }, res => {
+      if (res?.success) showPopupToast(`✅ 已更新語言欄位，載入 ${res.totalEntries} 筆`, 'success');
+    });
+  }, 800);
 });
 
 function populatePopupFieldSelects(columns) {
@@ -275,7 +327,7 @@ function resetPopupFieldSelects() {
   popupFieldHint.textContent      = '';
 }
 
-function showPopupTablePicker(token, tables) {
+function showPopupTablePicker(token, tables, rawId) {
   const icons  = { database: '🗃', simple_table: '📋' };
   const labels = { database: 'Database', simple_table: 'Simple Table' };
 
@@ -291,11 +343,8 @@ function showPopupTablePicker(token, tables) {
     btn.addEventListener('click', async () => {
       const { id, type, title } = btn.dataset;
       popupDbPicker.style.display = 'none';
-      popupSelectedTable = { id, type, title };
       try {
-        const cols = await getTableColumns(token, id, type);
-        populatePopupFieldSelects(cols);
-        showPopupToast(`✅ 已選取「${esc(title)}」`, 'success');
+        await applyPopupTable({ id, type, title }, rawId);
       } catch (e) {
         showPopupToast(`❌ 無法讀取欄位：${e.message}`, 'error');
       }
