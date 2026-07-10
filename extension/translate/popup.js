@@ -3,6 +3,7 @@ const textConfig = document.getElementById('text-config');
 const toggleSelect = document.getElementById('toggle-select');
 const toggleHover = document.getElementById('toggle-hover');
 const toggleClick = document.getElementById('toggle-click');
+const toggleImageOcr = document.getElementById('toggle-image-ocr');
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 
@@ -20,10 +21,11 @@ chrome.runtime.sendMessage({ action: 'getStatus' }, res => {
 });
 
 // Toggle modes
-chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode'], s => {
+chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode', 'imageOcrMode'], s => {
   toggleSelect.checked = s.selectMode !== false;
   toggleHover.checked = s.hoverMode === true;
   toggleClick.checked = s.clickMode === true;
+  toggleImageOcr.checked = s.imageOcrMode === true;
 });
 toggleSelect.addEventListener('change', () => {
   chrome.storage.sync.set({ selectMode: toggleSelect.checked });
@@ -33,6 +35,9 @@ toggleHover.addEventListener('change', () => {
 });
 toggleClick.addEventListener('change', () => {
   chrome.storage.sync.set({ clickMode: toggleClick.checked });
+});
+toggleImageOcr.addEventListener('change', () => {
+  chrome.storage.sync.set({ imageOcrMode: toggleImageOcr.checked });
 });
 
 // Refresh cache（background 會清空快取並立即重抓，回傳筆數）

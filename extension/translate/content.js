@@ -7,13 +7,15 @@ let lastRect = null;
 let selectMode = true;
 let hoverMode = false;
 let clickMode = false;
+let imageOcrMode = false;
 let captureToken = 0;
 let suspended = false; // AI 測試執行中由 side panel 設旗標暫停比對，避免面板干擾操作與錄影
 
-chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode'], s => {
+chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode', 'imageOcrMode'], s => {
   selectMode = s.selectMode !== false;
   hoverMode = s.hoverMode === true;
   clickMode = s.clickMode === true;
+  imageOcrMode = s.imageOcrMode === true;
 });
 chrome.storage.local.get(['tcSuspended'], s => {
   suspended = s.tcSuspended === true;
@@ -31,6 +33,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (!hoverMode) clearTimeout(hoverTimer);
   }
   if (changes.clickMode) clickMode = changes.clickMode.newValue === true;
+  if (changes.imageOcrMode) imageOcrMode = changes.imageOcrMode.newValue === true;
 });
 
 document.addEventListener('mouseup', onPointerUp);
@@ -38,6 +41,40 @@ document.addEventListener('keyup', onKeyUp);
 document.addEventListener('mousedown', onOutsideClick, true);
 document.addEventListener('keydown', onKeyDown);
 document.addEventListener('mousemove', onMouseMove);
+document.addEventListener('click', onImageOcrClick, true);
+
+// 圖片文字辨識模式：點擊圖片 → 經 bridge + Claude 視覺辨識文字 → 走既有比對流程。
+// 開啟時攔下圖片上的點擊（preventDefault），避免點 logo/banner 觸發原本的連結跳轉。
+function onImageOcrClick(e) {
+  if (!imageOcrMode || suspended) return;
+  if (panel && panel.contains(e.target)) return;
+  const src = findImageSource(e);
+  if (!src) return;
+  e.preventDefault();
+  e.stopPropagation();
+  ocrAndCheck(src, e.clientX, e.clientY);
+}
+
+/** 從點擊事件找出圖片來源：<img>（含被 overlay 蓋住的）→ CSS background-image。 */
+function findImageSource(e) {
+  const direct = e.target.closest && e.target.closest('img');
+  if (direct && (direct.currentSrc || direct.src)) return direct.currentSrc || direct.src;
+
+  // 輪播/遮罩常把透明層蓋在圖上，e.target 不是 img → 用座標往下找被蓋住的 img
+  for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
+    if (el.tagName === 'IMG' && (el.currentSrc || el.src)) return el.currentSrc || el.src;
+  }
+
+  // banner 常見做法：div 的 CSS background-image（computed style 回傳絕對網址）
+  let node = e.target;
+  for (let i = 0; i < 4 && node && node.nodeType === 1; i++) {
+    const bg = getComputedStyle(node).backgroundImage || '';
+    const m = /url\(["']?([^"')]+)["']?\)/.exec(bg);
+    if (m && /^https?:|^data:image\//.test(m[1])) return m[1];
+    node = node.parentElement;
+  }
+  return '';
+}
 
 function onPointerUp(e) {
   if (panel && panel.contains(e.target)) return;
@@ -110,6 +147,11 @@ function extractHoverText(el) {
       const v = (el.value || '').trim().replace(/\s+/g, ' ');
       if (v.length >= 2 && v.length <= HOVER_TEXT_MAX) return v;
     }
+  }
+  // 圖片文案若有寫在 alt 屬性就拿來比對（像素裡的字需 OCR，不在支援範圍）
+  if (el.matches && el.matches('img, area, input[type="image"]')) {
+    const alt = (el.getAttribute('alt') || '').trim().replace(/\s+/g, ' ');
+    if (alt.length >= 2 && alt.length <= HOVER_TEXT_MAX) return alt;
   }
   let node = el;
   for (let i = 0; i < 4 && node && node !== document.body; i++) {
@@ -228,6 +270,74 @@ function showPanel(text, rect) {
       return;
     }
     renderResults(text, res);
+  });
+}
+
+/** 點圖辨識：先開「辨識中」面板，OCR 回來後逐行查 Notion、合併結果呈現。 */
+function ocrAndCheck(src, x, y) {
+  removePanel();
+  const rect = { top: y, bottom: y, left: x };
+  lastRect = rect;
+
+  panel = document.createElement('div');
+  panel.id = 'tc-panel';
+  panel.setAttribute('data-tc', '1');
+  panel.innerHTML = `
+    <div class="tc-header">
+      <span class="tc-logo">🖼</span>
+      <span class="tc-title">圖片文字比對</span>
+      <button class="tc-close" title="關閉">✕</button>
+    </div>
+    <div class="tc-selected-row" style="display:none">
+      <span class="tc-label">圖片文字</span>
+      <span class="tc-selected-text"></span>
+    </div>
+    <div class="tc-loading">
+      <div class="tc-spinner"></div>
+      <span>辨識圖片文字中…（經 bridge / Claude 視覺，約數秒）</span>
+    </div>
+    <div class="tc-body" style="display:none"></div>
+  `;
+  panel.querySelector('.tc-close').addEventListener('click', removePanel);
+  document.body.appendChild(panel);
+  positionPanel(rect);
+
+  chrome.runtime.sendMessage({ action: 'ocrImage', src }, res => {
+    if (!panel) return; // 使用者已關閉
+    if (chrome.runtime.lastError) { renderError('無法連接擴充功能背景服務，請重新載入頁面'); return; }
+    if (res?.error) { renderError(`圖片辨識失敗：${res.error}`); return; }
+
+    const lines = (res?.text || '').split(/\n+/).map(t => t.trim().replace(/\s+/g, ' '))
+      .filter(t => t.length >= 2).slice(0, 8);
+    if (!lines.length) { renderError('圖片中未辨識到文字'); return; }
+
+    const row = panel.querySelector('.tc-selected-row');
+    row.style.display = '';
+    row.querySelector('.tc-selected-text').textContent = lines.join(' / ');
+
+    // 每行各自比對，同一筆規格取最高分，合併排序後呈現
+    Promise.all(lines.map(l => new Promise(r =>
+      chrome.runtime.sendMessage({ action: 'checkTranslation', text: l }, r)
+    ))).then(all => {
+      if (!panel) return;
+      const err = all.find(m => m?.error);
+      const okOnes = all.filter(m => m?.success);
+      if (!okOnes.length) {
+        renderError(err?.error === 'NOT_CONFIGURED' ? '請先完成 Notion 設定' : (err?.error || '查詢失敗'));
+        return;
+      }
+      const byId = new Map();
+      let total = 0;
+      for (const m of okOnes) {
+        total = m.totalEntries;
+        for (const r of m.results || []) {
+          const prev = byId.get(r.id);
+          if (!prev || r.matchScore > prev.matchScore) byId.set(r.id, r);
+        }
+      }
+      const results = [...byId.values()].sort((a, b) => b.matchScore - a.matchScore).slice(0, 8);
+      renderResults(lines.join(' '), { success: true, results, totalEntries: total });
+    });
   });
 }
 

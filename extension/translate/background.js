@@ -30,7 +30,77 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     chrome.runtime.openOptionsPage();
     return true;
   }
+  if (req.action === 'ocrImage') {
+    handleOcrImage(req.src, sendResponse);
+    return true;
+  }
 });
+
+// ── 圖片文字辨識（經 bridge → claude 視覺）────────────────────────────────────
+
+const OCR_MAX_BYTES = 4 * 1024 * 1024; // 過大的圖傳輸/辨識都慢，先擋 4MB
+
+/** SW 端抓圖（不受頁面 CORS 限制）→ dataURL → 丟 bridge ocr.image 辨識文字。 */
+async function handleOcrImage(src, sendResponse) {
+  try {
+    if (!src || !/^https?:|^data:image\//.test(src)) throw new Error('不支援的圖片來源');
+    let dataUrl = src;
+    if (!src.startsWith('data:')) {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`下載圖片失敗 HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (!/^image\//.test(blob.type)) throw new Error(`非圖片內容（${blob.type || '未知'}）`);
+      if (blob.size > OCR_MAX_BYTES) throw new Error('圖片過大（>4MB）');
+      dataUrl = await blobToDataUrl(blob);
+    }
+    const result = await callBridge('ocr.image', { dataUrl });
+    sendResponse({ success: true, text: (result?.text || '').trim() });
+  } catch (err) {
+    sendResponse({ error: err.message || 'OCR failed' });
+  }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('讀取圖片失敗'));
+    r.readAsDataURL(blob);
+  });
+}
+
+/** 開一條暫時性 WS 到 bridge 送單一 request（bridge 未啟動時直接報錯，不代為啟動）。 */
+function callBridge(type, payload, timeoutMs = 90000) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.sync.get(['bridgeUrl'], (s) => {
+      const url = s.bridgeUrl || 'ws://localhost:8787';
+      let ws;
+      try {
+        ws = new WebSocket(url);
+      } catch (e) {
+        return reject(new Error(e.message));
+      }
+      const id = 'tc' + Math.random().toString(36).slice(2);
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch { /* noop */ }
+        reject(new Error('bridge 未回應'));
+      }, timeoutMs);
+      ws.onopen = () => ws.send(JSON.stringify({ id, type, payload }));
+      ws.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error('無法連到 bridge，請先在 side panel 按「連線」'));
+      };
+      ws.onmessage = (ev) => {
+        let m;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.id !== id) return;
+        clearTimeout(timer);
+        try { ws.close(); } catch { /* noop */ }
+        m.ok ? resolve(m.result) : reject(new Error(m.error || 'request failed'));
+      };
+    });
+  });
+}
 
 /** 清空快取後立即重抓 Notion，回傳筆數讓 popup 顯示回饋。 */
 async function handleRefresh(sendResponse) {
