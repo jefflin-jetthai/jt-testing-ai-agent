@@ -36,7 +36,7 @@ import { availableAgents, listAgents } from "./agents/index.js";
 import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
-import { tabRelay, agentCapture } from "./attach.js";
+import { tabRelay, agentCapture, apiEvidence } from "./attach.js";
 import { ocrImage } from "./ocr.js";
 import type { TestCase } from "./protocol.js";
 
@@ -319,6 +319,7 @@ const MIME: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".md": "text/markdown; charset=utf-8",
   ".webm": "video/webm",
+  ".mp4": "video/mp4",
 };
 
 /** 把某個產出目錄渲染成可瀏覽的 HTML：gif/jpg/png 內嵌預覽，子目錄與其他檔案則列連結。 */
@@ -329,16 +330,19 @@ function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
     return a.name.localeCompare(b.name);
   });
   const isImg = (n: string) => /\.(gif|jpe?g|png)$/i.test(n);
+  const isVid = (n: string) => /\.(mp4|webm)$/i.test(n);
   const items = entries
     .map((e) => {
       const href = base + encodeURIComponent(e.name) + (e.isDirectory() ? "/" : "");
       if (e.isDirectory()) return `<div class="item"><a href="${href}">📁 ${e.name}/</a></div>`;
       if (isImg(e.name))
         return `<figure><img src="${href}" loading="lazy" /><figcaption>${e.name}</figcaption></figure>`;
+      if (isVid(e.name))
+        return `<figure><video src="${href}" controls preload="metadata"></video><figcaption>${e.name}</figcaption></figure>`;
       return `<div class="item"><a href="${href}">📄 ${e.name}</a></div>`;
     })
     .join("\n");
-  const hasImg = entries.some((e) => e.isDirectory() || isImg(e.name));
+  const hasImg = entries.some((e) => e.isDirectory() || isImg(e.name) || isVid(e.name));
   const clearUrl = base.replace("/artifacts/", "/artifacts-clear/");
   const openUrl = base.replace("/artifacts/", "/artifacts-open/");
   return `<!doctype html><meta charset="utf-8"><title>截圖 / 錄影 — ${urlPath}</title>
@@ -347,7 +351,7 @@ function renderArtifactIndex(dirFsPath: string, urlPath: string): string {
   h1{font-size:15px;color:#9cdcfe;font-weight:600;display:inline-block;margin-right:12px}
   .grid{display:flex;flex-wrap:wrap;gap:12px}
   figure{margin:0;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:8px;max-width:320px}
-  figure img{max-width:300px;display:block;border-radius:4px}
+  figure img,figure video{max-width:300px;display:block;border-radius:4px}
   figcaption{font-size:12px;color:#aaa;margin-top:6px;word-break:break-all}
   .item{padding:4px 0}a{color:#4fc1ff}
   button{color:#fff;border:0;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:13px;margin-right:6px}
@@ -405,7 +409,7 @@ const http = createServer((req, res) => {
       if (e.isDirectory()) {
         rmSync(p, { recursive: true, force: true }); // frame 暫存資料夾
         removed++;
-      } else if (/\.(gif|jpe?g|png|webm)$/i.test(e.name)) {
+      } else if (/\.(gif|jpe?g|png|webm|mp4)$/i.test(e.name)) {
         rmSync(p, { force: true }); // 圖片 / 錄影
         removed++;
       }
@@ -500,7 +504,14 @@ relayWss.on("connection", (ws) => {
 agentCdpWss.on("connection", (ws) => {
   console.log("[bridge] agent-cdp connected（browser-mcp 橋接）");
   ws.on("message", async (data) => {
-    let msg: { id?: number; method?: string; params?: unknown; jt?: string; label?: string };
+    let msg: {
+      id?: number;
+      method?: string;
+      params?: unknown;
+      jt?: string;
+      label?: string;
+      evidence?: Record<string, unknown>;
+    };
     try {
       msg = JSON.parse(data.toString());
     } catch {
@@ -509,6 +520,11 @@ agentCdpWss.on("connection", (ws) => {
     // 「重點式錄影」擷取訊號（非 CDP 指令）：由進行中的 StepRecorder 處理
     if (msg.jt === "capture") {
       void agentCapture.handler?.(msg.label);
+      return;
+    }
+    // API 證據（api_check 工具）：由進行中的 run 寫入該 TC 的 api-NN.json
+    if (msg.jt === "apiEvidence") {
+      if (msg.evidence) apiEvidence.handler?.(msg.evidence);
       return;
     }
     if (!msg.method) return;

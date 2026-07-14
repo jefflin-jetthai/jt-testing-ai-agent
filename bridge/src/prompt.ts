@@ -112,6 +112,7 @@ export function buildRunPrompt(
   tc: TestCase,
   target?: { url?: string; title?: string },
   knowledge?: string,
+  opts?: { apiCheck?: boolean }, // attach 模式提供 api_check 工具
 ): string {
   const lines: string[] = [];
   lines.push(`# 測試案例 ${tc.tcId}：${tc.title}`);
@@ -134,15 +135,28 @@ export function buildRunPrompt(
       "1. 先 list_pages → 找到符合上述目標 URL 的分頁 → select_page。",
       "2. 依序執行測試步驟，必要時 take_snapshot / wait_for。",
       "3. 逐條驗證『確認項目』，記錄實際結果。",
+      ...(opts?.apiCheck
+        ? [
+            "3.5 需要以 API 驗證時，一律用 api_check 工具（會自動存完整回應為證據檔並把結果卡疊進錄影），不要用 evaluate 裸打 fetch，也不要用 shell/curl 繞過（那樣不會留證據）。" +
+              "check 寫這次驗證什麼；assert 寫 JS 判斷式（可用 json / status / text）；note 寫預期值說明。" +
+              "跨來源被 CORS 擋時工具會自動 fallback 到本機直呼（不帶 cookie），所以需要認證的 API 務必用 headers 傳 Authorization——token 先用 evaluate 從 localStorage / sessionStorage / 頁面既有請求取得。",
+            "3.6 若 api_check 回報 FAIL 是因為你自己的參數／assert 寫錯（如缺 Authorization、欄位路徑錯），修正後必須「重新用 api_check」再驗一次，" +
+              "不可改用 evaluate 繞過——錄影與證據檔必須呈現最終真實結果。CHECKS 的每條 API 相關結論都必須與最後一次對應 api_check 的證據一致。",
+          ]
+        : []),
       "4. 最後輸出下列固定格式（供程式解析）：",
       "",
       "```verdict",
       "STATUS: PASS / FAIL / WARN",
       "SUMMARY: 一句話總結",
+      "ENV: <實際受測環境，依受測 URL 與頁面內容判斷（例如 ZAZADEV / staging / prod）；無法判斷寫 unknown>",
+      "VERSION: <實際觀察到的產品版本字串（頁面 footer、console、API 回應等）；觀察不到寫 unknown，不要猜>",
       "CHECKS:",
       "- <確認項目1>: PASS/FAIL/WARN - 實際觀察",
       "- <確認項目2>: PASS/FAIL/WARN - 實際觀察",
       "```",
+      "",
+      "ENV / VERSION 必須是你「這次執行實際觀察到」的值，不可抄測試案例或文件記載。",
       "",
       "STATUS 判定原則：",
       "- 因『前置條件』無法滿足（未登入、無權限、找不到受測頁面/元素、缺資料）而無法執行驗證 → 用 WARN，並在 SUMMARY 寫明卡在哪、缺什麼。",
@@ -174,26 +188,40 @@ export function parseMemory(finalText: string): string[] {
     .filter((l) => l && !/^(無|沒有|N\/A|none)/i.test(l));
 }
 
+/** 取 verdict 區塊的 ENV / VERSION 實測值；unknown / 佔位字樣視為未回報。 */
+function observedField(block: string, key: "ENV" | "VERSION"): string | undefined {
+  const v = block.match(new RegExp(`^${key}:\\s*(.+)$`, "im"))?.[1]?.trim();
+  if (!v || /^(unknown|n\/?a|無|不明|<.*>)$/i.test(v)) return undefined;
+  return v;
+}
+
 /** 從 agent 最終輸出解析 verdict。找不到 verdict 區塊時保守判為 error。 */
 export function parseVerdict(finalText: string): {
   status: "pass" | "fail" | "warn" | "error";
   summary: string;
+  /** agent 實際觀察到的受測環境 / 產品版本（非 Notion 記載） */
+  env?: string;
+  version?: string;
 } {
   const block = finalText.match(/```verdict([\s\S]*?)```/i)?.[1] ?? finalText;
   // WARN/BLOCKED/SKIP = 前置造成無法測試（非失敗）
   const statusM = block.match(/STATUS:\s*(PASS|FAIL|WARN|BLOCKED|SKIP(?:PED)?)/i);
   const summaryM = block.match(/SUMMARY:\s*(.+)/i);
+  const env = observedField(block, "ENV");
+  const version = observedField(block, "VERSION");
   if (!statusM) {
     // 沒有 verdict：常見是 agent 本身的錯誤（額度/認證等），直接把原文帶出來方便診斷
     const raw = (finalText || "").trim();
     if (/session limit|usage limit|rate limit|limit reached|quota|credit|insufficient|額度|用量|上限/i.test(raw))
-      return { status: "error", summary: `Agent 額度/限制：${raw.slice(0, 160)}` };
+      return { status: "error", summary: `Agent 額度/限制：${raw.slice(0, 160)}`, env, version };
     return {
       status: "error",
       summary: summaryM?.[1]?.trim() || raw.slice(0, 200) || "無法解析測試結果（agent 無輸出）",
+      env,
+      version,
     };
   }
   const s = statusM[1].toUpperCase();
   const status = s === "PASS" ? "pass" : s.startsWith("WARN") || s.startsWith("BLOCK") || s.startsWith("SKIP") ? "warn" : "fail";
-  return { status, summary: summaryM?.[1]?.trim() ?? "" };
+  return { status, summary: summaryM?.[1]?.trim() ?? "", env, version };
 }

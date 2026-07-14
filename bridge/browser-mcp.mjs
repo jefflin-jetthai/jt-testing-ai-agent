@@ -42,6 +42,13 @@ function signalCapture(label) {
   }
 }
 
+// API 證據：把完整 request/response 傳給 bridge 寫入該 run 的產出資料夾（api-NN.json）。
+function sendApiEvidence(evidence) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ jt: "apiEvidence", evidence })); } catch { /* noop */ }
+  }
+}
+
 function cdp(method, params) {
   return new Promise((resolve) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return resolve({ error: { message: "bridge CDP 通道未連線" } });
@@ -156,6 +163,188 @@ async function toolEvaluate({ expression }) {
   return typeof v === "string" ? v : JSON.stringify(v);
 }
 
+// ── api_check：API 驗證 + 雙證據（錄影入鏡證據卡 + 完整回應 JSON 存檔）──────────
+const API_BODY_MAX = 200_000; // 回應本文存檔上限（字元）
+let apiSeq = 0; // 每個 TC 一個 MCP 程序，計數自然歸零
+
+/** 對回應本文跑 assert（json/status/text 可用）。回傳 {pass, assertError}。 */
+function runAssert(assertExpr, text, status) {
+  if (!assertExpr) return { pass: null, assertError: null };
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* 非 JSON */ }
+  try {
+    return { pass: !!new Function("json", "status", "text", "return (" + assertExpr + ")")(json, status, text), assertError: null };
+  } catch (e) {
+    return { pass: false, assertError: String((e && e.message) || e) };
+  }
+}
+
+/** 在頁面 context 打 API（自動帶登入態 cookie），回傳狀態/耗時/本文/斷言結果。 */
+async function apiFetchInPage({ url, method, headers, body, assert, credentials = "include" }) {
+  const arg = JSON.stringify({ url, method, headers: headers || null, body: body ?? null, assert: assert || null, max: API_BODY_MAX, credentials });
+  return evalJs(`(async () => {
+    const a = ${arg};
+    const t0 = performance.now();
+    let resp = null, text = "", err = null;
+    try {
+      resp = await fetch(a.url, {
+        method: a.method,
+        credentials: a.credentials,
+        headers: a.headers || undefined,
+        body: a.body == null ? undefined : (typeof a.body === "string" ? a.body : JSON.stringify(a.body)),
+      });
+      text = await resp.text();
+    } catch (e) { err = String((e && e.message) || e); }
+    const durationMs = Math.round(performance.now() - t0);
+    let json = null; try { json = JSON.parse(text); } catch { /* 非 JSON 回應 */ }
+    let pass = null, assertError = null;
+    if (!err && a.assert) {
+      try { pass = !!(new Function("json", "status", "text", "return (" + a.assert + ")"))(json, resp.status, text); }
+      catch (e) { pass = false; assertError = String((e && e.message) || e); }
+    }
+    return {
+      err, status: resp ? resp.status : 0, finalUrl: resp ? resp.url : a.url,
+      durationMs, pass, assertError, pageUrl: location.href,
+      truncated: text.length > a.max,
+      bodyText: text.length > a.max ? text.slice(0, a.max) : text,
+    };
+  })()`, true);
+}
+
+/**
+ * 在 browser-mcp 自身（Node）程序直呼 API：無 CORS 限制，作為頁面 fetch 被擋時的 fallback。
+ * 注意：不帶頁面 cookie，只送明示 headers（需要 token 時 agent 必須用 headers 傳）。
+ */
+async function apiFetchInNode({ url, method, headers, body, assert, baseUrl }) {
+  let abs = url;
+  try { abs = new URL(url, baseUrl || undefined).toString(); } catch { /* 保持原樣讓 fetch 報錯 */ }
+  const t0 = Date.now();
+  let resp = null, text = "", err = null;
+  try {
+    resp = await fetch(abs, {
+      method,
+      headers: headers || undefined,
+      body: body == null ? undefined : (typeof body === "string" ? body : JSON.stringify(body)),
+    });
+    text = await resp.text();
+  } catch (e) { err = String((e && e.cause && e.cause.message) || (e && e.message) || e); }
+  const durationMs = Date.now() - t0;
+  const { pass, assertError } = err ? { pass: null, assertError: null } : runAssert(assert, text, resp.status);
+  return {
+    err, status: resp ? resp.status : 0, finalUrl: resp ? resp.url : abs,
+    durationMs, pass, assertError, pageUrl: baseUrl || "",
+    truncated: text.length > API_BODY_MAX,
+    bodyText: text.length > API_BODY_MAX ? text.slice(0, API_BODY_MAX) : text,
+  };
+}
+
+/** headers 存證用遮罩：token/cookie 類只留前 12 字元。 */
+function maskHeaders(headers) {
+  if (!headers || typeof headers !== "object") return undefined;
+  return Object.fromEntries(
+    Object.entries(headers).map(([k, v]) => [
+      k,
+      /authorization|token|cookie|secret|key/i.test(k) ? String(v).slice(0, 12) + "…(遮罩)" : v,
+    ]),
+  );
+}
+
+/** 把證據卡疊到受測頁右上角（錄影入鏡用），約 1.8 秒後自動移除。 */
+async function showEvidenceCard(card) {
+  const arg = JSON.stringify(card);
+  await evalJs(`(() => {
+    const d = ${arg};
+    const old = document.getElementById("__jt_api_evidence"); if (old) old.remove();
+    const colors = { PASS: ["#38bdf8", "#14532d", "#86efac"], FAIL: ["#f87171", "#7f1d1d", "#fecaca"], INFO: ["#38bdf8", "#1e3a5f", "#93c5fd"] };
+    const [edge, vBg, vFg] = colors[d.verdict] || colors.INFO;
+    const el = document.createElement("div");
+    el.id = "__jt_api_evidence";
+    el.style.cssText = "position:fixed;top:14px;right:14px;width:330px;z-index:2147483647;" +
+      "background:rgba(10,16,26,.94);color:#e8eef6;border:1px solid #2d3d52;border-left:3px solid " + edge + ";" +
+      "border-radius:8px;padding:12px 14px 10px;font:11.5px/1.55 ui-monospace,Menlo,monospace;" +
+      "box-shadow:0 6px 24px rgba(0,0,0,.45);pointer-events:none;word-break:break-all;";
+    const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    el.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="font-weight:700;font-size:11px;letter-spacing:.08em;color:#7dd3fc">API 證據 #' + esc(d.seq) + '</span>' +
+        '<span style="margin-left:auto;font-weight:700;font-size:11px;padding:1px 8px;border-radius:4px;background:' + vBg + ';color:' + vFg + '">' + esc(d.verdict) + '</span>' +
+      '</div>' +
+      '<div><span style="color:#64748b">' + esc(d.method) + '</span> ' + esc(d.url) + '</div>' +
+      '<div><span style="color:#64748b">status</span> <b style="color:' + vFg + '">' + esc(d.status) + '</b> · ' + esc(d.durationMs) + 'ms</div>' +
+      (d.note ? '<div style="margin-top:7px;padding-top:7px;border-top:1px dashed #2d3d52;color:#cbd5e1">' + esc(d.note) + '</div>' : '') +
+      '<div style="margin-top:7px;font-size:10px;color:#64748b;display:flex;justify-content:space-between">' +
+        '<span>' + esc(d.file) + '</span><span>' + esc(d.time) + '</span></div>';
+    document.documentElement.appendChild(el);
+    setTimeout(() => el.remove(), 1800);
+    return true;
+  })()`);
+}
+
+async function toolApiCheck({ url, method, headers, body, check, assert, note }) {
+  if (!url) throw new Error("需要 url");
+  const m = String(method || "GET").toUpperCase();
+  const seq = ++apiSeq;
+
+  // 三段式：頁面 fetch（帶 cookie）→ 頁面 fetch（omit，解 ACAO:* 與 credentials 衝突）
+  // → Node 直呼（無 CORS；不帶 cookie，只送明示 headers）。逐段留下嘗試紀錄。
+  const attempts = [];
+  let via = "page";
+  let r = await apiFetchInPage({ url, method: m, headers, body, assert, credentials: "include" });
+  if (r.err) {
+    attempts.push({ via: "page(cookie)", error: r.err });
+    via = "page-omit";
+    r = { ...(await apiFetchInPage({ url, method: m, headers, body, assert, credentials: "omit" })), pageUrl: r.pageUrl };
+  }
+  if (r.err) {
+    attempts.push({ via: "page(omit)", error: r.err });
+    via = "node";
+    r = await apiFetchInNode({ url, method: m, headers, body, assert, baseUrl: r.pageUrl });
+  }
+
+  const verdict = r.err ? "FAIL" : r.pass === null ? "INFO" : r.pass ? "PASS" : "FAIL";
+  const file = `api-${String(seq).padStart(2, "0")}.json`;
+  const viaLabel = via === "page" ? "" : via === "page-omit" ? "（頁面 fetch 不帶 cookie）" : "（CORS 受阻，改由本機直呼、僅帶明示 headers）";
+  const noteText = r.err
+    ? `網路錯誤：${r.err}`
+    : r.assertError
+      ? `assert 執行失敗：${r.assertError}`
+      : `${note || check || ""}${viaLabel}`;
+
+  // 1) 完整證據 → bridge 寫檔（api-NN.json）
+  sendApiEvidence({
+    seq,
+    capturedAt: new Date().toISOString(),
+    check: check || "",
+    via,
+    attempts: attempts.length ? attempts : undefined,
+    request: { method: m, url, pageUrl: r.pageUrl, headers: maskHeaders(headers), body: body ?? undefined },
+    response: { status: r.status, durationMs: r.durationMs, truncated: r.truncated, bodyText: r.bodyText, error: r.err || undefined },
+    assert: assert ? { expression: assert, result: verdict, error: r.assertError || undefined, note: note || undefined } : undefined,
+  });
+
+  // 2) 證據卡入鏡 + 觸發錄影擷取（卡片顯示約 1.8s，涵蓋擷取時機）
+  const shortUrl = (r.finalUrl || url).replace(/^https?:\/\/[^/]*/, "") || url;
+  try {
+    await showEvidenceCard({
+      seq: String(seq).padStart(2, "0"), verdict, method: m, url: shortUrl,
+      status: r.status, durationMs: r.durationMs, note: noteText, file,
+      time: new Date().toTimeString().slice(0, 8),
+    });
+    signalCapture("api_check");
+  } catch { /* 證據卡失敗不影響驗證本身 */ }
+
+  const excerpt = (r.bodyText || "").slice(0, 4000);
+  return [
+    `API 證據 #${String(seq).padStart(2, "0")}（${verdict}）已記錄 → ${file}`,
+    `${m} ${r.finalUrl || url} → ${r.status} · ${r.durationMs}ms${r.err ? ` · 錯誤：${r.err}` : ""}${via !== "page" ? ` · via=${via}${viaLabel}` : ""}`,
+    ...(attempts.length ? [`先前嘗試：${attempts.map((a) => `${a.via} → ${a.error}`).join("；")}`] : []),
+    assert ? `assert: ${assert} → ${r.pass}${r.assertError ? `（執行失敗：${r.assertError}）` : ""}` : "(未提供 assert，僅記錄)",
+    ``,
+    `回應本文（節錄 4000 字）：`,
+    excerpt || "(空)",
+  ].join("\n");
+}
+
 /** 設定 viewport 尺寸（響應式測試用），透過 CDP Emulation.setDeviceMetricsOverride。 */
 async function toolSetViewport({ width, height, mobile }) {
   const w = Math.round(Number(width) || 0);
@@ -197,8 +386,27 @@ const TOOLS = {
     run: (a) => toolWaitFor(a),
   },
   evaluate: {
-    def: { description: "在分頁執行任意 JS 運算式並回傳結果（驗證用，如 document.querySelectorAll('x').length）。", inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] } },
+    def: { description: "在分頁執行任意 JS 運算式並回傳結果（DOM 驗證用，如 document.querySelectorAll('x').length）。API 驗證請改用 api_check（自動留證據）。", inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] } },
     run: (a) => toolEvaluate(a),
+  },
+  api_check: {
+    def: {
+      description: "API 驗證專用：在頁面 context 打 API（自動帶登入態），存完整回應為證據檔（api-NN.json）並把結果卡疊進錄影。跨來源被 CORS 擋時自動 fallback：頁面 fetch 不帶 cookie → 本機直呼（無 CORS，但只送明示 headers）。因此需要認證的 API 務必用 headers 傳 Authorization（token 可先用 evaluate 從 localStorage/sessionStorage 取）。assert 為 JS 判斷式，可用變數 json（解析後回應）/ status / text，例：status===200 && json.list.length>0。check 寫這次要驗證什麼（一句話）；note 選填補充（如預期值）。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "API 網址（可相對路徑）" },
+          method: { type: "string", description: "預設 GET" },
+          headers: { type: "object" },
+          body: { description: "請求本文（物件會轉 JSON）" },
+          check: { type: "string", description: "這次驗證的目的（一句話）" },
+          assert: { type: "string", description: "JS 判斷式（json/status/text 可用）" },
+          note: { type: "string", description: "補充說明（如預期 vs 實際）" },
+        },
+        required: ["url", "check"],
+      },
+    },
+    run: (a) => toolApiCheck(a),
   },
   set_viewport: {
     def: { description: "設定瀏覽器 viewport 尺寸（響應式 / RWD 測試用）。width 必填；height 預設 800；mobile=true 啟用行動裝置模式（觸控 + deviceScaleFactor=2）。例：桌機用 width=1200；手機用 width=390, mobile=true。", inputSchema: { type: "object", properties: { width: { type: "number" }, height: { type: "number" }, mobile: { type: "boolean" } }, required: ["width"] } },

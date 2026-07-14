@@ -19,3 +19,11 @@ export function isRelayConnected(): boolean {
 export const agentCapture: {
   handler: ((label?: string) => void | Promise<void>) | null;
 } = { handler: null };
+
+/**
+ * API 證據掛鉤：agent 用 api_check 工具驗證 API 時，browser-mcp 經 /agent-cdp
+ * 送完整 request/response，由進行中的 run 寫入該 TC 的 api-NN.json 並納入報告。
+ */
+export const apiEvidence: {
+  handler: ((evidence: Record<string, unknown>) => void) | null;
+} = { handler: null };

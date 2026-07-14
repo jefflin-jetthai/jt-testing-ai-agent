@@ -48,8 +48,12 @@ export interface BuildReportArgs {
   finalText: string;
   agentName: string;
   durationMs: number;
-  gifFileName?: string; // 例如 TC-01.gif（相對檔名）
+  recordingFileName?: string; // 例如 TC-01.gif / TC-01.mp4（相對檔名）
   targetUrl?: string; // 受測網站
+  actualEnv?: string; // agent 這次執行實際觀察到的環境（優先於 Notion 記載）
+  actualVersion?: string; // agent 實際觀察到的產品版本（優先於 Notion 記載）
+  /** api_check 工具留下的證據摘要（完整 request/response 在對應 json 檔） */
+  apiEvidence?: { seq: number; check: string; result: string; note: string; file: string }[];
 }
 
 /** 產生 markdown 字串（表格式報告：摘要表 + 步驟表 + 確認項目表 + 結論）。 */
@@ -67,8 +71,12 @@ export function buildMarkdown(a: BuildReportArgs): string {
     ["整體結果", STATUS_EMOJI[status]],
   ];
   if (a.targetUrl) info.push(["受測網站", a.targetUrl]);
-  if (tc.meta?.ENV) info.push(["測試環境", String(tc.meta.ENV)]);
-  if (tc.meta?.version) info.push(["version", String(tc.meta.version)]);
+  // 環境/版本以「這次執行實際觀察到」為準；只有 Notion 記載時明確標注、不冒充實測值
+  const env = a.actualEnv || (tc.meta?.ENV ? `${tc.meta.ENV}（Notion 記載，未實地確認）` : "");
+  if (env) info.push(["測試環境", env]);
+  const version =
+    a.actualVersion || (tc.meta?.version ? `${tc.meta.version}（Notion 記載，未實地確認）` : "");
+  if (version) info.push(["version", version]);
   info.push(["Agent", agentName]);
   info.push(["耗時", `${Math.round(durationMs / 1000)}s`]);
   info.push(["測試日期", now]);
@@ -103,11 +111,20 @@ export function buildMarkdown(a: BuildReportArgs): string {
     lines.push("| - | (無確認項目) | - | - |");
   }
 
+  // ── API 證據表（api_check 工具產出）──
+  if (a.apiEvidence?.length) {
+    lines.push("", "## API 證據", "| # | 檢查 | 結果 | 說明 | 檔案 |", "| --- | --- | --- | --- | --- |");
+    for (const e of a.apiEvidence) {
+      const badge = STATUS_EMOJI[e.result.toLowerCase()] ?? e.result;
+      lines.push(`| ${e.seq} | ${cell(e.check)} | ${cell(badge)} | ${cell(e.note)} | ${cell(e.file)} |`);
+    }
+  }
+
   // ── 結論 ──
   lines.push("", "## 結論", summary || "(無)");
 
-  if (a.gifFileName) {
-    lines.push("", "## 錄影", `\`${a.gifFileName}\`（測試過程錄影，請手動拖入 Notion）`);
+  if (a.recordingFileName) {
+    lines.push("", "## 錄影", `\`${a.recordingFileName}\`（測試過程錄影，請手動拖入 Notion）`);
   }
 
   // 保留 agent 原始 verdict 供追溯

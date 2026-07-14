@@ -5,7 +5,7 @@
  * Phase 2 聚焦「即時探索式驅動」；錄影(gif)/markdown 寫回於 Phase 3/4 接上。
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentCwd,
@@ -23,10 +23,11 @@ import {
   writeBrowserMcpConfig,
   writeMcpConfig,
 } from "./mcp.js";
-import { isRelayConnected } from "./attach.js";
+import { isRelayConnected, apiEvidence } from "./attach.js";
 import { attachSystemPrompt, SYSTEM_PROMPT, buildRunPrompt, parseMemory, parseVerdict } from "./prompt.js";
 import { appendKnowledge, loadKnowledge, productKey } from "./knowledge.js";
 import { StepRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
+import type { RecordingFormat } from "./recorder.js";
 import { writeMarkdown } from "./report.js";
 import { BRIDGE_PORT } from "./config.js";
 import type {
@@ -112,6 +113,7 @@ export async function startRun(
   }
 
   const mode = payload.mode ?? "remote";
+  const recFormat: RecordingFormat = payload.recording === "mp4" ? "mp4" : "gif";
 
   // attach 模式：用自建 jt-browser MCP（Runtime.evaluate）經 chrome.debugger 驅動當前分頁，繞開 puppeteer。
   // remote 模式：用 chrome-devtools-mcp 連 9222。
@@ -178,8 +180,8 @@ export async function startRun(
         emit({ type: "run.step", payload: { runId, tcId: tc.tcId, phase: "start", title: tc.title } });
 
         // 開始錄影（每測項一段；失敗不阻擋測試）。attach→經 chrome.debugger；remote→連 9222。
-        const gifPathOut = join(runDir, `${artifactBase}.gif`);
-        const gifTmp = join(runDir, `.tmp-${artifactBase}`);
+        const recPathOut = join(runDir, `${artifactBase}.${recFormat}`);
+        const recTmp = join(runDir, `.tmp-${artifactBase}`);
         let recorder: ScreencastRecorder | StepRecorder | null = null;
         const stopRecorder = async (): Promise<string | undefined> => {
           if (!recorder) return undefined;
@@ -201,12 +203,12 @@ export async function startRun(
 
         try {
           if (mode === "attach") {
-            recorder = new StepRecorder(gifPathOut, gifTmp);
+            recorder = new StepRecorder(recPathOut, recTmp, recFormat);
             await recorder.start();
           } else {
             const pageWs = await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL);
             if (pageWs) {
-              recorder = new ScreencastRecorder(pageWs, gifPathOut, gifTmp);
+              recorder = new ScreencastRecorder(pageWs, recPathOut, recTmp, recFormat);
               await recorder.start();
             } else {
               log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
@@ -217,9 +219,38 @@ export async function startRun(
           recorder = null;
         }
 
+        // API 證據（api_check 工具）：寫入 <TC>-api-NN.json，並收摘要供報告表格
+        const apiEvidences: {
+          seq: number;
+          check: string;
+          result: string;
+          note: string;
+          file: string;
+        }[] = [];
+        apiEvidence.handler = (ev) => {
+          try {
+            const seq = Number((ev as any)?.seq) || apiEvidences.length + 1;
+            const file = `${artifactBase}-api-${String(seq).padStart(2, "0")}.json`;
+            writeFileSync(join(runDir, file), JSON.stringify({ tcId: tc.tcId, ...ev }, null, 2));
+            const assert = (ev as any)?.assert;
+            apiEvidences.push({
+              seq,
+              check: String((ev as any)?.check ?? ""),
+              result: String(assert?.result ?? "INFO"),
+              note: String(assert?.note ?? ""),
+              file,
+            });
+            log({ tcId: tc.tcId, kind: "system", text: `API 證據 #${seq} → ${file}` });
+          } catch (e) {
+            log({ tcId: tc.tcId, kind: "stderr", text: `API 證據寫入失敗：${formatError(e)}` });
+          }
+        };
+
         // 每個 TC 都重讀知識庫：同一批 run 內，後面的 TC 能用到前面剛學到的知識
         const knowledgeKey = productKey(payload.target?.url);
-        const prompt = buildRunPrompt(tc, payload.target, loadKnowledge(knowledgeKey));
+        const prompt = buildRunPrompt(tc, payload.target, loadKnowledge(knowledgeKey), {
+          apiCheck: mode === "attach",
+        });
         let finalText = "";
         try {
           const res = await agent.run({
@@ -244,6 +275,8 @@ export async function startRun(
           finalText = res.finalText || (res.ok ? "" : "agent 執行失敗（未回傳錯誤內容）");
         } catch (err) {
           finalText = formatError(err);
+        } finally {
+          apiEvidence.handler = null;
         }
 
         // 被使用者中止 → 不產出 markdown / 結果，直接結束
@@ -253,8 +286,8 @@ export async function startRun(
           break;
         }
 
-        const gifPath = await stopRecorder();
-        if (gifPath) log({ tcId: tc.tcId, kind: "system", text: `已產出錄影：${gifPath}` });
+        const recPath = await stopRecorder();
+        if (recPath) log({ tcId: tc.tcId, kind: "system", text: `已產出錄影：${recPath}` });
 
         const verdict = parseVerdict(finalText);
 
@@ -271,7 +304,10 @@ export async function startRun(
         }
 
         const durationMs = Date.now() - startedAt;
-        const gifFileName = gifPath ? `${artifactBase}.gif` : undefined;
+        const recFileName = recPath ? `${artifactBase}.${recFormat}` : undefined;
+        const recUrl = recFileName
+          ? `http://localhost:${BRIDGE_PORT}/artifacts/${runId}/${recFileName}`
+          : undefined;
 
         // 產生 Notion 友善 markdown 並寫檔
         const mdPath = join(runDir, `${artifactBase}.md`);
@@ -282,8 +318,11 @@ export async function startRun(
           finalText,
           agentName,
           durationMs,
-          gifFileName,
+          recordingFileName: recFileName,
           targetUrl: payload.target?.url,
+          actualEnv: verdict.env,
+          actualVersion: verdict.version,
+          apiEvidence: apiEvidences,
         });
 
         const result: RunResultPayload = {
@@ -293,10 +332,12 @@ export async function startRun(
           summary: verdict.summary || finalText.slice(0, 200),
           markdown,
           markdownPath: mdPath,
-          gifPath,
-          gifUrl: gifFileName
-            ? `http://localhost:${BRIDGE_PORT}/artifacts/${runId}/${gifFileName}`
-            : undefined,
+          recordingPath: recPath,
+          recordingUrl: recUrl,
+          recordingFormat: recPath ? recFormat : undefined,
+          // 舊欄位相容（舊版 extension 只認 gifPath/gifUrl）
+          gifPath: recPath,
+          gifUrl: recUrl,
           durationMs,
         };
         emit({ type: "run.result", payload: result });

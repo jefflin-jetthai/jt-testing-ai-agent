@@ -4,7 +4,7 @@ let hoverTimer = null;
 let lastText = '';
 let lastHoverText = '';
 let lastRect = null;
-let selectMode = true;
+let selectMode = false; // 預設全關，由使用者在 popup 自行開啟
 let hoverMode = false;
 let clickMode = false;
 let imageOcrMode = false;
@@ -12,7 +12,7 @@ let captureToken = 0;
 let suspended = false; // AI 測試執行中由 side panel 設旗標暫停比對，避免面板干擾操作與錄影
 
 chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode', 'imageOcrMode'], s => {
-  selectMode = s.selectMode !== false;
+  selectMode = s.selectMode === true;
   hoverMode = s.hoverMode === true;
   clickMode = s.clickMode === true;
   imageOcrMode = s.imageOcrMode === true;
@@ -27,7 +27,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     return;
   }
   if (area !== 'sync') return;
-  if (changes.selectMode) selectMode = changes.selectMode.newValue !== false;
+  if (changes.selectMode) selectMode = changes.selectMode.newValue === true;
   if (changes.hoverMode) {
     hoverMode = changes.hoverMode.newValue === true;
     if (!hoverMode) clearTimeout(hoverTimer);

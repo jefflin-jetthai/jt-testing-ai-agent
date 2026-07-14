@@ -1,7 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
-// 顯示版本（讀 manifest）
-$("version").textContent = `v${chrome.runtime.getManifest().version}`;
+// 顯示版本（讀 manifest）。非 release 建置的 zip 會帶 version_name（含 commit hash），優先顯示。
+const manifest = chrome.runtime.getManifest();
+$("version").textContent = `v${manifest.version_name || manifest.version}`;
 const status = (msg, ok) => {
   $("status").textContent = msg;
   $("status").style.color = ok ? "var(--ok)" : "var(--muted)";

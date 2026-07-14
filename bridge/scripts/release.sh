@@ -33,8 +33,8 @@ sed -i '' -E 's/("version"[[:space:]]*:[[:space:]]*)"[0-9]+\.[0-9]+\.[0-9]+"/\1"
 echo "  ✓ manifest: $(grep -o '"version": "[^"]*"' "$MANIFEST")"
 echo "  ✓ package : $(grep -o '"version": "[^"]*"' "$PKG" | head -1)"
 
-# 2) 打包
-( cd "$BRIDGE" && npm run build:zip >/dev/null )
+# 2) 打包（RELEASE_BUILD=1：正式版號，不加 commit hash 後綴）
+( cd "$BRIDGE" && RELEASE_BUILD=1 npm run build:zip >/dev/null )
 ZIP="$BRIDGE/sea/dist/JT-Testing-AI-Agent-bridge-node-$VER.zip"
 BUNDLE="$BRIDGE/sea/dist/bundle.cjs"
 [ -f "$ZIP" ] && [ -f "$BUNDLE" ] || { echo "❌ 打包產物缺失"; exit 1; }

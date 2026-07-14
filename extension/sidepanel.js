@@ -359,6 +359,14 @@ const MODEL_OPTIONS = {
   ],
 };
 
+// 錄影輸出格式偏好：勾選＝MP4 影片、未勾＝GIF（持久化，下次開啟沿用）
+chrome.storage.sync.get(["recVideo"], ({ recVideo }) => {
+  $("rec-video").checked = !!recVideo;
+});
+$("rec-video").addEventListener("change", () => {
+  chrome.storage.sync.set({ recVideo: $("rec-video").checked });
+});
+
 // 執行時 agent CLI 回報的「實際解析到的 model」（run.model 事件；持久化供下次開啟顯示）
 const resolvedModels = {};
 chrome.storage.sync.get(["resolvedModels"], ({ resolvedModels: saved }) => {
@@ -498,7 +506,17 @@ async function getActiveTab() {
   return tab;
 }
 
-/** 渲染單一 TC 結果卡：狀態、gif 預覽、複製 markdown、寫回 Notion。 */
+/** 錄影預覽 HTML：mp4 用 <video>（可拖曳進度），gif 用 <img>；沿用舊欄位 gifUrl 相容。 */
+function recordingPreviewHtml(p) {
+  const url = p.recordingUrl || p.gifUrl;
+  if (!url) return "";
+  const isVideo = p.recordingFormat === "mp4" || /\.(mp4|webm)$/i.test(url);
+  return isVideo
+    ? `<video class="gif" src="${url}" controls preload="metadata" title="${p.tcId} 錄影"></video>`
+    : `<img class="gif" src="${url}" alt="${p.tcId} 錄影" />`;
+}
+
+/** 渲染單一 TC 結果卡：狀態、錄影預覽（gif 圖 / mp4 影片）、複製 markdown、寫回 Notion。 */
 function renderResult(p) {
   const box = $("results");
   const card = document.createElement("div");
@@ -517,7 +535,7 @@ function renderResult(p) {
       <span class="meta">${Math.round((p.durationMs || 0) / 1000)}s</span>
     </div>
     <div class="meta">${escapeHtml(p.summary || "")}</div>
-    ${p.gifUrl ? `<img class="gif" src="${p.gifUrl}" alt="${p.tcId} 錄影" />` : ""}
+    ${recordingPreviewHtml(p)}
     <div class="row" style="margin-top:6px">
       <button class="copy-md" style="background:#3a3a3a">複製 markdown</button>
       <button class="write-notion">寫回 Notion</button>
@@ -715,6 +733,7 @@ $("btn-run").addEventListener("click", async () => {
       agent,
       model: MODEL_OPTIONS[agent] ? $("model-select")?.value : undefined,
       mode: $("mode-select")?.value || "remote",
+      recording: $("rec-video")?.checked ? "mp4" : "gif",
       target: { url: tab?.url, title: tab?.title, tabId: tab?.id },
     });
     currentRunId = runId;

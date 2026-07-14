@@ -96,14 +96,22 @@ function ordinalOf(text) {
   return null;
 }
 
+/** 條列型 block 一律是「內容」，不可誤判成區段標籤（如確認項目「驗證下單成功」）。 */
+const LIST_BLOCK_TYPES = new Set(["to_do", "numbered_list_item", "bulleted_list_item"]);
+
 /** 區段標籤判斷 → 回傳 section key 或 null。 */
-function sectionOf(text) {
+function sectionOf(text, blockType) {
   const t = text.trim();
-  if (/測試目的|測試目標|^目的|^目標|purpose/i.test(t)) return "purpose";
-  if (/前置條件|前提|precondition/i.test(t)) return "preconditions";
-  if (/測試步驟|^步驟|^操作|steps/i.test(t)) return "steps";
-  if (/確認項目|預期|驗證|expected|assert/i.test(t)) return "expected";
+  if (blockType && LIST_BLOCK_TYPES.has(blockType)) return null;
   if (/AI\s*測試報告|ai\s*report/i.test(t)) return "_aiReport";
+  // 標籤必為短標題；長句（如目的敘述含「驗證」字樣）是內容，不是標籤。
+  // 「目的：xxx」這種同列帶內容的標籤，只看冒號前的部分判斷。
+  const label = t.split(/[：:]/)[0].trim();
+  if (label.length > 15) return null;
+  if (/測試目的|測試目標|^目的|^目標|purpose/i.test(label)) return "purpose";
+  if (/前置條件|前提|precondition/i.test(label)) return "preconditions";
+  if (/測試步驟|^步驟|^操作|steps/i.test(label)) return "steps";
+  if (/確認項目|預期|驗證|expected|assert/i.test(label)) return "expected";
   return null;
 }
 
@@ -127,7 +135,7 @@ async function parseTcDetail(token, tcBlockId) {
     const children = await getChildren(token, blockId);
     for (const b of children) {
       const text = blockText(b).trim();
-      const sec = sectionOf(text);
+      const sec = sectionOf(text, b.type);
       if (sec === "_aiReport") {
         detail.aiReportBlockId = b.id;
         current = null;
@@ -135,7 +143,8 @@ async function parseTcDetail(token, tcBlockId) {
       }
       if (sec) {
         current = sec;
-        const inline = text.replace(/^[^：:]*[：:]/, "").trim(); // 「目的：xxx」同列內容
+        // 「目的：xxx」同列內容（沒有冒號＝純標籤行，不可把標籤文字當內容）
+        const inline = text.match(/[：:]\s*([\s\S]+)$/)?.[1]?.trim() ?? "";
         if (sec === "purpose" && inline) detail.purpose = inline;
         if (b.has_children) await walk(b.id, depth + 1, indent); // 標籤底下若還有內容
         continue;

@@ -46,7 +46,7 @@ setInterval(checkBridgeStatus, 4000);
 
 // Toggle modes
 chrome.storage.sync.get(['selectMode', 'hoverMode', 'clickMode', 'imageOcrMode'], s => {
-  toggleSelect.checked = s.selectMode !== false;
+  toggleSelect.checked = s.selectMode === true; // 預設全關，由使用者自行開啟
   toggleHover.checked = s.hoverMode === true;
   toggleClick.checked = s.clickMode === true;
   toggleImageOcr.checked = s.imageOcrMode === true;

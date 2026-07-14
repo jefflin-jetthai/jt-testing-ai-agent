@@ -39,6 +39,8 @@ export interface RunStartPayload {
   model?: string; // 指定 model（目前供 claude 下拉選擇；未指定用 bridge 預設）
   /** "remote"=另開 remote-debugging Chrome（預設、穩定）；"attach"=接管當前分頁(chrome.debugger，實驗) */
   mode?: "remote" | "attach";
+  /** 錄影輸出格式（預設 gif；mp4=H.264 影片，時間軸/畫質較佳） */
+  recording?: "gif" | "mp4";
   target?: { url?: string; title?: string; tabId?: number };
 }
 
@@ -65,8 +67,12 @@ export interface RunResultPayload {
   summary: string;
   markdown?: string; // Notion 友善 markdown 全文（供複製 / 寫回）
   markdownPath?: string; // 本地檔路徑
-  gifPath?: string; // 本地 gif 路徑
-  gifUrl?: string; // 經 bridge HTTP 可瀏覽的 gif URL（UI 預覽用）
+  recordingPath?: string; // 本地錄影路徑（.gif 或 .mp4）
+  recordingUrl?: string; // 經 bridge HTTP 可瀏覽的錄影 URL（UI 預覽用）
+  recordingFormat?: "gif" | "mp4";
+  /** @deprecated 舊欄位，等同 recordingPath / recordingUrl（相容舊版 extension） */
+  gifPath?: string;
+  gifUrl?: string;
   durationMs: number;
 }
 

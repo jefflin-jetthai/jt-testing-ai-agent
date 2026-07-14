@@ -7,6 +7,21 @@ cd "$(dirname "$0")/.."          # → bridge/
 ROOT="$PWD"
 OUT="$ROOT/sea/dist"
 VERSION="$(node -p "require('./package.json').version")"
+BASE_VERSION="$VERSION"
+
+# 非正式 release 的建置（HEAD 不在 v$VERSION tag 上，或有未 commit 修改）→
+# 版號加 -<short hash>（有未 commit 修改再加 -dirty）方便辨識測試版。
+# release.sh 於 bump 版號後、tag 前打包，帶 RELEASE_BUILD=1 跳過此判斷維持乾淨版號。
+if [ "${RELEASE_BUILD:-0}" != "1" ]; then
+  HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+  TAG_SHA="$(git rev-parse "v$VERSION^{commit}" 2>/dev/null || true)"
+  DIRTY="$(git status --porcelain 2>/dev/null || true)"
+  if [ -n "$HEAD_SHA" ] && { [ "$HEAD_SHA" != "$TAG_SHA" ] || [ -n "$DIRTY" ]; }; then
+    VERSION="$VERSION-$(git rev-parse --short HEAD)"
+    [ -n "$DIRTY" ] && VERSION="$VERSION-dirty"
+    echo "==> 非 release 建置，版號標記為 $VERSION"
+  fi
+fi
 EXT_ID="gbodpgijbhekommdppfcgebacbpmedcj"
 HOST_NAME="com.jt_testing.bridge_launcher"
 APPDIR="JT Testing AI Agent"
@@ -34,6 +49,17 @@ fi
 if [ -d "$ROOT/../extension" ]; then
   cp -R "$ROOT/../extension" "$STAGE/extension"
   find "$STAGE/extension" -name ".DS_Store" -delete 2>/dev/null || true
+  # 非 release 建置：把帶 hash 的版號寫進 manifest 的 version_name（Options 設定頁顯示用；
+  # manifest.version 只允許純數字，故用 version_name）
+  if [ "$VERSION" != "$BASE_VERSION" ]; then
+    node -e '
+      const fs = require("fs");
+      const [p, v] = process.argv.slice(1);
+      const m = JSON.parse(fs.readFileSync(p, "utf8"));
+      m.version_name = v;
+      fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+    ' "$STAGE/extension/manifest.json" "$VERSION"
+  fi
 fi
 
 # 帶上 Windows 安裝/解除安裝 .bat（與 bundle.cjs 同層；.bat 內以 %~dp0bundle.cjs 取用）。
