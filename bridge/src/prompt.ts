@@ -132,6 +132,7 @@ export function buildRunPrompt(
   lines.push(
     [
       "\n## 執行要求",
+      "0. 所有瀏覽器操作一律經提供的瀏覽器工具執行；禁止用 shell/腳本直連 bridge、CDP 或 WebSocket 操作瀏覽器（會破壞測試證據與畫面尺寸）。",
       "1. 先 list_pages → 找到符合上述目標 URL 的分頁 → select_page。",
       "2. 依序執行測試步驟，必要時 take_snapshot / wait_for。",
       ...(opts?.apiCheck

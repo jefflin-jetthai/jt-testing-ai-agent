@@ -22,10 +22,15 @@ const BROWSER_MCP_PATH = resolve(__dirname, "..", "browser-mcp.mjs");
  * attach 模式的 MCP 設定：掛自建 jt-browser（Runtime.evaluate based），
  * 經 bridge /agent-cdp → extension chrome.debugger 驅動當前分頁。繞開 puppeteer。
  */
-export function writeBrowserMcpConfig(): string {
+export function writeBrowserMcpConfig(allowViewport = false): string {
   const dir = mkdtempSync(join(tmpdir(), "jt-ai-bmcp-"));
   const path = join(dir, "mcp.json");
-  const env = { JT_BRIDGE_CDP_URL: `ws://localhost:${BRIDGE_PORT}/agent-cdp` };
+  // JT_ALLOW_VIEWPORT：只有 TC 明確要求 RWD 驗證才開放 set_viewport（reset 不受限），
+  // 防 agent 拿它「調大視窗看整張表單」造成畫面/錄影尺寸異常
+  const env = {
+    JT_BRIDGE_CDP_URL: `ws://localhost:${BRIDGE_PORT}/agent-cdp`,
+    JT_ALLOW_VIEWPORT: allowViewport ? "1" : "0",
+  };
   // node 版（用系統 node 跑 bundle）：node <bundle> --browser-mcp
   // SEA 版（單一執行檔）：自身 binary --browser-mcp，免依賴 node
   // 開發：node browser-mcp.mjs

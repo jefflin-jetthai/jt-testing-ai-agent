@@ -23,7 +23,7 @@ import {
   writeBrowserMcpConfig,
   writeMcpConfig,
 } from "./mcp.js";
-import { isRelayConnected, apiEvidence } from "./attach.js";
+import { isRelayConnected, apiEvidence, viewportGate } from "./attach.js";
 import { attachSystemPrompt, SYSTEM_PROMPT, buildRunPrompt, parseMemory, parseVerdict } from "./prompt.js";
 import { appendKnowledge, loadKnowledge, productKey } from "./knowledge.js";
 import { StepRecorder, ScreencastRecorder, findPageWsUrl } from "./recorder.js";
@@ -143,8 +143,8 @@ export async function startRun(
     let runError: string | undefined;
     let resolvedModelReported = false; // 每 run 只回報一次實際 model
     try {
-      const mcpConfigPath = mode === "attach" ? writeBrowserMcpConfig() : writeMcpConfig(CDP_BROWSER_URL);
       const allowedTools = mode === "attach" ? JT_BROWSER_TOOLS : CHROME_DEVTOOLS_TOOLS;
+      const remoteMcpConfigPath = mode === "attach" ? null : writeMcpConfig(CDP_BROWSER_URL);
       const systemPrompt = mode === "attach" ? attachSystemPrompt() : SYSTEM_PROMPT;
 
       // claude 由 bridge 指定 model；codex/antigravity 用各自 CLI 的預設 model
@@ -271,6 +271,13 @@ export async function startRun(
         const prompt = buildRunPrompt(tc, payload.target, loadKnowledge(knowledgeKey), {
           apiCheck: mode === "attach",
         });
+        // set_viewport 只在 TC 明確要求 RWD/響應式驗證時開放（每 TC 判斷）；
+        // viewportGate 是 relay 層閘門，agent 繞過工具直連 /agent-cdp 也會被擋
+        const wantsViewport = /rwd|responsive|響應式|自適應|適配|viewport|手機版|平板|窄螢幕|mobile/i.test(
+          [tc.title, tc.purpose, ...tc.steps, ...tc.expected].join(" "),
+        );
+        viewportGate.allowed = wantsViewport;
+        const mcpConfigPath = remoteMcpConfigPath ?? writeBrowserMcpConfig(wantsViewport);
         let finalText = "";
         try {
           const res = await agent.run({
@@ -297,6 +304,7 @@ export async function startRun(
           finalText = formatError(err);
         } finally {
           apiEvidence.handler = null;
+          viewportGate.allowed = false;
         }
 
         // 被使用者中止 → 不產出 markdown / 結果，直接結束
