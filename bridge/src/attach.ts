@@ -27,3 +27,11 @@ export const agentCapture: {
 export const apiEvidence: {
   handler: ((evidence: Record<string, unknown>) => void) | null;
 } = { handler: null };
+
+/**
+ * 步驟標記掛鉤：agent 用 step_note 工具宣告目前測試步驟，
+ * 由進行中的 StepRecorder 更新受測頁頂部橫幅（錄影入鏡）並拍一格。
+ */
+export const stepNote: {
+  handler: ((info: { seq?: number; total?: number; title?: string }) => void) | null;
+} = { handler: null };

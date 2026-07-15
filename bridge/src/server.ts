@@ -36,7 +36,7 @@ import { availableAgents, listAgents } from "./agents/index.js";
 import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
-import { tabRelay, agentCapture, apiEvidence } from "./attach.js";
+import { tabRelay, agentCapture, apiEvidence, stepNote } from "./attach.js";
 import { ocrImage } from "./ocr.js";
 import type { TestCase } from "./protocol.js";
 
@@ -525,6 +525,12 @@ agentCdpWss.on("connection", (ws) => {
     // API 證據（api_check 工具）：由進行中的 run 寫入該 TC 的 api-NN.json
     if (msg.jt === "apiEvidence") {
       if (msg.evidence) apiEvidence.handler?.(msg.evidence);
+      return;
+    }
+    // 步驟標記（step_note 工具）：更新錄影步驟橫幅
+    if (msg.jt === "stepNote") {
+      const m = msg as unknown as { seq?: number; total?: number; title?: string };
+      stepNote.handler?.({ seq: m.seq, total: m.total, title: m.title });
       return;
     }
     if (!msg.method) return;

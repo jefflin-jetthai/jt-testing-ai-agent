@@ -134,6 +134,12 @@ export function buildRunPrompt(
       "\n## 執行要求",
       "1. 先 list_pages → 找到符合上述目標 URL 的分頁 → select_page。",
       "2. 依序執行測試步驟，必要時 take_snapshot / wait_for。",
+      ...(opts?.apiCheck
+        ? [
+            "2.5 每開始執行『測試步驟』清單中的一步，先呼叫 step_note（seq=步驟序號、total=總步數、title=該步驟簡短標題）——" +
+              "它會把目前步驟顯示在受測頁頂部橫幅並錄進影片；換下一步時再呼叫一次。",
+          ]
+        : []),
       "3. 逐條驗證『確認項目』，記錄實際結果。",
       ...(opts?.apiCheck
         ? [

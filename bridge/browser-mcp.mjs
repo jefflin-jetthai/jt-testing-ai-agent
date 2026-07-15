@@ -49,6 +49,13 @@ function sendApiEvidence(evidence) {
   }
 }
 
+// 步驟標記：通知 bridge 更新受測頁頂部的步驟橫幅（由 StepRecorder 注入並拍一格入鏡）。
+function sendStepNote(info) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ jt: "stepNote", ...info })); } catch { /* noop */ }
+  }
+}
+
 function cdp(method, params) {
   return new Promise((resolve) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return resolve({ error: { message: "bridge CDP 通道未連線" } });
@@ -166,6 +173,7 @@ async function toolEvaluate({ expression }) {
 // ── api_check：API 驗證 + 雙證據（錄影入鏡證據卡 + 完整回應 JSON 存檔）──────────
 const API_BODY_MAX = 200_000; // 回應本文存檔上限（字元）
 let apiSeq = 0; // 每個 TC 一個 MCP 程序，計數自然歸零
+let preferredVia = null; // 上次成功的呼叫路徑（page / page-omit / node），同程序內沿用
 
 /** 對回應本文跑 assert（json/status/text 可用）。回傳 {pass, assertError}。 */
 function runAssert(assertExpr, text, status) {
@@ -259,7 +267,7 @@ async function showEvidenceCard(card) {
     const [edge, vBg, vFg] = colors[d.verdict] || colors.INFO;
     const el = document.createElement("div");
     el.id = "__jt_api_evidence";
-    el.style.cssText = "position:fixed;top:14px;right:14px;width:330px;z-index:2147483647;" +
+    el.style.cssText = "position:fixed;top:40px;right:14px;width:330px;z-index:2147483647;" + /* top 避開步驟橫幅 */
       "background:rgba(10,16,26,.94);color:#e8eef6;border:1px solid #2d3d52;border-left:3px solid " + edge + ";" +
       "border-radius:8px;padding:12px 14px 10px;font:11.5px/1.55 ui-monospace,Menlo,monospace;" +
       "box-shadow:0 6px 24px rgba(0,0,0,.45);pointer-events:none;word-break:break-all;";
@@ -285,21 +293,38 @@ async function toolApiCheck({ url, method, headers, body, check, assert, note })
   const m = String(method || "GET").toUpperCase();
   const seq = ++apiSeq;
 
-  // 三段式：頁面 fetch（帶 cookie）→ 頁面 fetch（omit，解 ACAO:* 與 credentials 衝突）
-  // → Node 直呼（無 CORS；不帶 cookie，只送明示 headers）。逐段留下嘗試紀錄。
+  // 三段梯（頁面帶 cookie / 頁面 omit / Node 直呼），依情境決定起點：
+  // - 帶 Authorization 的請求通常是 token 驗證，cookie 無用且 credentials:include
+  //   遇到 ACAO:* 一律被瀏覽器擋 → 直接從 omit 起跳，省掉每次必敗的第一段。
+  // - 記住本程序內上次成功的路徑（preferredVia），之後的呼叫直接走通的那條。
+  const hasAuth = !!headers && Object.keys(headers).some((k) => /^authorization$/i.test(k));
+  const defaultLadder = hasAuth ? ["page-omit", "page", "node"] : ["page", "page-omit", "node"];
+  const ladder = preferredVia
+    ? [preferredVia, ...defaultLadder.filter((v) => v !== preferredVia)]
+    : defaultLadder;
+
   const attempts = [];
-  let via = "page";
-  let r = await apiFetchInPage({ url, method: m, headers, body, assert, credentials: "include" });
-  if (r.err) {
-    attempts.push({ via: "page(cookie)", error: r.err });
-    via = "page-omit";
-    r = { ...(await apiFetchInPage({ url, method: m, headers, body, assert, credentials: "omit" })), pageUrl: r.pageUrl };
+  const viaLabels = { page: "page(cookie)", "page-omit": "page(omit)", node: "node" };
+  let via = ladder[0];
+  let r = null;
+  let pageUrl = "";
+  for (const rung of ladder) {
+    via = rung;
+    r =
+      rung === "node"
+        ? await apiFetchInNode({ url, method: m, headers, body, assert, baseUrl: pageUrl })
+        : await apiFetchInPage({
+            url, method: m, headers, body, assert,
+            credentials: rung === "page" ? "include" : "omit",
+          });
+    pageUrl = r.pageUrl || pageUrl;
+    if (!r.err) {
+      preferredVia = rung; // 下次同程序的呼叫直接走這條
+      break;
+    }
+    attempts.push({ via: viaLabels[rung], error: r.err });
   }
-  if (r.err) {
-    attempts.push({ via: "page(omit)", error: r.err });
-    via = "node";
-    r = await apiFetchInNode({ url, method: m, headers, body, assert, baseUrl: r.pageUrl });
-  }
+  r = { ...r, pageUrl };
 
   const verdict = r.err ? "FAIL" : r.pass === null ? "INFO" : r.pass ? "PASS" : "FAIL";
   const file = `api-${String(seq).padStart(2, "0")}.json`;
@@ -388,6 +413,24 @@ const TOOLS = {
   evaluate: {
     def: { description: "在分頁執行任意 JS 運算式並回傳結果（DOM 驗證用，如 document.querySelectorAll('x').length）。API 驗證請改用 api_check（自動留證據）。", inputSchema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] } },
     run: (a) => toolEvaluate(a),
+  },
+  step_note: {
+    def: {
+      description: "標記目前正在執行的測試步驟：步驟簡短標題會顯示在受測頁頂部橫幅並錄進影片。每開始執行『測試步驟』清單中的一步就先呼叫一次（title 用該步驟的簡短摘要，seq/total 為步驟序號與總數）。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          seq: { type: "number", description: "目前步驟序號（1 起算）" },
+          total: { type: "number", description: "步驟總數" },
+          title: { type: "string", description: "步驟簡短標題" },
+        },
+        required: ["title"],
+      },
+    },
+    run: (a) => {
+      sendStepNote({ seq: a.seq, total: a.total, title: String(a.title || "") });
+      return `已標記步驟${a.seq != null ? ` ${a.seq}${a.total ? "/" + a.total : ""}` : ""}：${a.title}`;
+    },
   },
   api_check: {
     def: {

@@ -202,13 +202,14 @@ export async function startRun(
         };
 
         try {
+          const tcLabel = [tc.tcId, tc.title].filter(Boolean).join(" ").slice(0, 80);
           if (mode === "attach") {
-            recorder = new StepRecorder(recPathOut, recTmp, recFormat);
+            recorder = new StepRecorder(recPathOut, recTmp, recFormat, tcLabel);
             await recorder.start();
           } else {
             const pageWs = await findPageWsUrl(payload.target?.url, CDP_BROWSER_URL);
             if (pageWs) {
-              recorder = new ScreencastRecorder(pageWs, recPathOut, recTmp, recFormat);
+              recorder = new ScreencastRecorder(pageWs, recPathOut, recTmp, recFormat, tcLabel);
               await recorder.start();
             } else {
               log({ tcId: tc.tcId, kind: "stderr", text: "找不到可錄影的分頁，略過錄影" });
@@ -240,7 +241,26 @@ export async function startRun(
               note: String(assert?.note ?? ""),
               file,
             });
-            log({ tcId: tc.tcId, kind: "system", text: `API 證據 #${seq} → ${file}` });
+            // API 錯誤（網路錯誤 / HTTP >=400 / assert FAIL）→ 即時紅色警示；正常 → 一般紀錄
+            const req = (ev as any)?.request ?? {};
+            const resp = (ev as any)?.response ?? {};
+            const status = Number(resp.status ?? 0);
+            const reason = resp.error
+              ? `網路錯誤：${resp.error}`
+              : status >= 400
+                ? `HTTP ${status}`
+                : assert?.result === "FAIL"
+                  ? `驗證不符：${assert?.note || assert?.expression || "assert 不成立"}`
+                  : "";
+            if (reason) {
+              log({
+                tcId: tc.tcId,
+                kind: "stderr",
+                text: `🛑 API 錯誤 #${seq}：${req.method ?? ""} ${req.url ?? ""} → ${reason}（詳見 ${file}）`,
+              });
+            } else {
+              log({ tcId: tc.tcId, kind: "system", text: `API 證據 #${seq}（${assert?.result ?? "INFO"}）→ ${file}` });
+            }
           } catch (e) {
             log({ tcId: tc.tcId, kind: "stderr", text: `API 證據寫入失敗：${formatError(e)}` });
           }
