@@ -36,7 +36,7 @@ import { availableAgents, listAgents } from "./agents/index.js";
 import { cancelExport, exportToPytest } from "./exporter.js";
 import { createCommit, diff, push } from "./git.js";
 import { chromeStatus, launchChrome, pickFolder } from "./chrome.js";
-import { tabRelay, agentCapture, apiEvidence, stepNote } from "./attach.js";
+import { tabRelay, agentCapture, apiEvidence, stepNote, viewportGate } from "./attach.js";
 import { ocrImage } from "./ocr.js";
 import type { TestCase } from "./protocol.js";
 
@@ -534,6 +534,29 @@ agentCdpWss.on("connection", (ws) => {
       return;
     }
     if (!msg.method) return;
+    // relay 層防護：只放行 jt-browser 工具實際需要的 CDP 指令（agent 有 shell 權限，
+    // 可繞過工具直連本 relay——白名單 + viewport 閘門在這裡才擋得住）。
+    const reject = (message: string) => {
+      if (ws.readyState === ws.OPEN)
+        ws.send(JSON.stringify({ id: msg.id, error: { message } }));
+    };
+    const ALLOWED_CDP = new Set([
+      "Runtime.evaluate",
+      "Emulation.setDeviceMetricsOverride",
+      "Emulation.clearDeviceMetricsOverride",
+      "Emulation.setTouchEmulationEnabled",
+    ]);
+    if (!ALLOWED_CDP.has(msg.method)) {
+      reject(`CDP 指令未開放：${msg.method}（請使用 jt-browser 工具操作瀏覽器）`);
+      return;
+    }
+    const touchOn =
+      msg.method === "Emulation.setTouchEmulationEnabled" &&
+      !!(msg.params as { enabled?: boolean } | undefined)?.enabled;
+    if (!viewportGate.allowed && (msg.method === "Emulation.setDeviceMetricsOverride" || touchOn)) {
+      reject("此測試案例未要求 RWD/響應式驗證，viewport 調整已停用（清除/還原不受限）");
+      return;
+    }
     const r = await tabRelay.sendCommand(msg.method, msg.params ?? {});
     if (ws.readyState === ws.OPEN)
       ws.send(JSON.stringify({ id: msg.id, result: r.result, error: r.error }));

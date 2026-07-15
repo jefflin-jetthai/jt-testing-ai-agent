@@ -412,6 +412,13 @@ async function toolSetViewport({ width, height, mobile, reset }) {
     await cdp("Emulation.setTouchEmulationEnabled", { enabled: false });
     return "已還原預設 viewport（清除裝置模擬）";
   }
+  // 硬性閘門：本測試案例未要求 RWD 驗證時禁用（bridge 依 TC 內容逐案開放）。
+  // 防 agent 拿 viewport「調大視窗看整張表單」——會造成實際畫面與錄影尺寸異常。
+  if (process.env.JT_ALLOW_VIEWPORT !== "1") {
+    throw new Error(
+      "此測試案例未要求 RWD/響應式驗證，set_viewport 已停用。要看到更多內容請捲動頁面或重新 take_snapshot（snapshot 不受可視範圍限制）",
+    );
+  }
   const w = Math.round(Number(width) || 0);
   const h = Math.round(Number(height) || 800);
   if (!w || w < 1) throw new Error("需要有效的 width");

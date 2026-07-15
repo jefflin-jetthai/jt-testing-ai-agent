@@ -35,3 +35,10 @@ export const apiEvidence: {
 export const stepNote: {
   handler: ((info: { seq?: number; total?: number; title?: string }) => void) | null;
 } = { handler: null };
+
+/**
+ * viewport 閘門（relay 層）：目前 TC 是否允許調整 viewport（RWD 測項才開）。
+ * 由 runner 逐 TC 設定；/agent-cdp relay 據此攔截 Emulation 設定指令——
+ * 這層在 bridge 內，agent 用 shell 繞過工具直連 relay 也擋得住。
+ */
+export const viewportGate = { allowed: false };
