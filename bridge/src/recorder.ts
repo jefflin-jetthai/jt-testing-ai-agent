@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -89,6 +90,24 @@ function writeConcatList(
   return listPath;
 }
 
+/** 讀 JPEG 標頭取得寬高（SOF 標記）；解析失敗回 null。 */
+function jpegSize(buf: Buffer): { w: number; h: number } | null {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) {
+      i++;
+      continue;
+    }
+    const marker = buf[i + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+    }
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
 /** 用 ffmpeg 把 frames 依 concat 清單合成 gif 或 mp4。回傳是否成功。 */
 function assembleRecording(
   frameDir: string,
@@ -99,11 +118,32 @@ function assembleRecording(
 ): Promise<boolean> {
   const listPath = writeConcatList(frameDir, frames, fixedDurationMs);
   const args = ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-vsync", "vfr"];
+
+  // 固定畫布：以第一張 frame 的尺寸（縮到輸出上限）為準，全部 frame 等比縮放後置中
+  // letterbox。避免測試中途 set_viewport / DPR 改變造成 frame 尺寸不一，讓編碼失敗
+  // 或影片比例被擠壞。
+  const maxW = format === "mp4" ? MP4_OUT_WIDTH : GIF_OUT_WIDTH;
+  let canvas: { w: number; h: number } | null = null;
+  try {
+    const first = jpegSize(readFileSync(join(frameDir, frames[0].file)));
+    if (first) {
+      const s = Math.min(1, maxW / first.w);
+      const even = (n: number) => Math.max(2, Math.round((n * s) / 2) * 2);
+      canvas = { w: even(first.w), h: even(first.h) };
+    }
+  } catch {
+    /* 讀取失敗 → 退回舊有單純縮放 */
+  }
+  const fit = canvas
+    ? `scale=${canvas.w}:${canvas.h}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+      `pad=${canvas.w}:${canvas.h}:(ow-iw)/2:(oh-ih)/2:color=0x101820`
+    : null;
+
   if (format === "mp4") {
     // 寬高需為偶數（yuv420p 限制）；faststart 讓瀏覽器可邊下邊播
     args.push(
       "-vf",
-      `scale='trunc(min(${MP4_OUT_WIDTH},iw)/2)*2':-2:flags=lanczos`,
+      fit ?? `scale='trunc(min(${MP4_OUT_WIDTH},iw)/2)*2':-2:flags=lanczos`,
       "-c:v",
       "libx264",
       "-pix_fmt",
@@ -112,12 +152,8 @@ function assembleRecording(
       "+faststart",
     );
   } else {
-    args.push(
-      "-vf",
-      `scale='min(${GIF_OUT_WIDTH},iw)':-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-      "-loop",
-      "0",
-    );
+    const pre = fit ?? `scale='min(${GIF_OUT_WIDTH},iw)':-1:flags=lanczos`;
+    args.push("-vf", `${pre},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, "-loop", "0");
   }
   args.push(outPath);
   return new Promise((resolve) => {
@@ -277,10 +313,21 @@ export class StepRecorder {
     this.bannerText = tcLabel;
   }
 
+  /** 清除裝置模擬（viewport/觸控 override）。TC 前防前次殘留、TC 後還原使用者分頁。 */
+  private async resetEmulation(): Promise<void> {
+    try {
+      await tabRelay.sendCommand("Emulation.clearDeviceMetricsOverride", {});
+      await tabRelay.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: false });
+    } catch {
+      /* 重置失敗不阻擋測試 */
+    }
+  }
+
   async start(): Promise<void> {
     if (!tabRelay.connected) throw new Error("tabRelay 未連線，無法錄影");
     if (existsSync(this.frameDir)) rmSync(this.frameDir, { recursive: true, force: true });
     mkdirSync(this.frameDir, { recursive: true });
+    await this.resetEmulation(); // 防上一個 TC 的 set_viewport 殘留
     agentCapture.handler = (label) => this.captureStep(label);
     // agent 宣告目前步驟 → 更新橫幅並拍一格（步驟起點入鏡）
     stepNote.handler = (info) => {
@@ -353,6 +400,7 @@ export class StepRecorder {
     agentCapture.handler = null;
     stepNote.handler = null;
     await this.chain.catch(() => {}); // 等最後一張拍完
+    await this.resetEmulation(); // TC 結束還原 viewport，避免影響使用者與下一個 TC
     if (this.frames.length === 0) return null;
     const ok = await assembleRecording(
       this.frameDir,

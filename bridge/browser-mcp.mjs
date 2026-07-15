@@ -132,11 +132,46 @@ async function toolNavigate(url) {
   return `已導向 ${url}`;
 }
 
+/**
+ * 完整滑鼠事件序列（帶元素中心座標的 pointerdown→mousedown→focus→pointerup→mouseup→click）。
+ * 只用 el.click() 會缺真實座標與 down/up 事件，Element UI 這類 popper 浮層
+ * 的定位（mousedown 觸發）與關閉（click-outside）都不會發生，
+ * 造成下拉選單卡在畫面左上角 (0,0) 並殘留——錄影裡看起來像 bug。
+ */
+const REAL_CLICK_JS = `
+  const fire = (el, type, Ctor, x, y, extra) => el.dispatchEvent(new Ctor(type, Object.assign({
+    bubbles: true, cancelable: true, composed: true, view: window,
+    clientX: x, clientY: y, button: 0,
+    buttons: type.endsWith('down') ? 1 : 0, detail: 1,
+  }, extra || {})));
+  const realClick = (el) => {
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const PE = window.PointerEvent || MouseEvent;
+    const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    fire(el, 'pointerdown', PE, x, y, pointer);
+    fire(el, 'mousedown', MouseEvent, x, y);
+    try { el.focus(); } catch {}
+    fire(el, 'pointerup', PE, x, y, pointer);
+    fire(el, 'mouseup', MouseEvent, x, y);
+    fire(el, 'click', MouseEvent, x, y);
+  };
+`;
+
 async function toolClick({ ref, text }) {
-  const js =
+  const finder =
     ref != null
-      ? `(() => { const el = document.querySelector('[data-jt-ref=' + JSON.stringify(String(${JSON.stringify(String(ref))})) + ']'); if(!el) return {ok:false,err:'找不到 ref ${ref}'}; el.scrollIntoView({block:'center'}); el.click(); return {ok:true}; })()`
-      : `(() => { const t=${JSON.stringify(text || "")}; const el=[...document.querySelectorAll('a,button,[role=button],input[type=submit]')].find(e => (e.innerText||e.value||'').trim().includes(t)); if(!el) return {ok:false,err:'找不到文字: '+t}; el.scrollIntoView({block:'center'}); el.click(); return {ok:true}; })()`;
+      ? `document.querySelector('[data-jt-ref=' + JSON.stringify(String(${JSON.stringify(String(ref))})) + ']')`
+      : `[...document.querySelectorAll('a,button,[role=button],input[type=submit]')].find(e => (e.innerText||e.value||'').trim().includes(${JSON.stringify(text || "")}))`;
+  const errMsg = ref != null ? `'找不到 ref ${ref}'` : `'找不到文字: ' + ${JSON.stringify(text || "")}`;
+  // 可見性防護：分頁/畫面切換後舊 snapshot 的 ref 仍殘留在隱藏 DOM 上，
+  // 對隱藏元素派發點擊會讓 Element UI 這類浮層以 0x0 參考元素定位到畫面左上角。
+  const js = `(() => { ${REAL_CLICK_JS} const el = ${finder}; if (!el) return {ok:false,err:${errMsg}};
+    const r0 = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+    if (r0.width === 0 || r0.height === 0 || cs.display === 'none' || cs.visibility === 'hidden')
+      return {ok:false,err:'目標元素目前不可見（可能是切換分頁前的舊 snapshot ref）；請先點擊切換到該元素所在的分頁/畫面，再重新 take_snapshot 取得新 ref。不要用 set_viewport 嘗試讓元素出現'};
+    realClick(el); return {ok:true}; })()`;
   const r = await evalJs(js);
   if (!r?.ok) throw new Error(r?.err || "點擊失敗");
   return `已點擊 ${ref != null ? "ref " + ref : '"' + text + '"'}`;
@@ -371,7 +406,12 @@ async function toolApiCheck({ url, method, headers, body, check, assert, note })
 }
 
 /** 設定 viewport 尺寸（響應式測試用），透過 CDP Emulation.setDeviceMetricsOverride。 */
-async function toolSetViewport({ width, height, mobile }) {
+async function toolSetViewport({ width, height, mobile, reset }) {
+  if (reset === true || Number(width) === 0) {
+    await cdp("Emulation.clearDeviceMetricsOverride", {});
+    await cdp("Emulation.setTouchEmulationEnabled", { enabled: false });
+    return "已還原預設 viewport（清除裝置模擬）";
+  }
   const w = Math.round(Number(width) || 0);
   const h = Math.round(Number(height) || 800);
   if (!w || w < 1) throw new Error("需要有效的 width");
@@ -452,7 +492,7 @@ const TOOLS = {
     run: (a) => toolApiCheck(a),
   },
   set_viewport: {
-    def: { description: "設定瀏覽器 viewport 尺寸（響應式 / RWD 測試用）。width 必填；height 預設 800；mobile=true 啟用行動裝置模式（觸控 + deviceScaleFactor=2）。例：桌機用 width=1200；手機用 width=390, mobile=true。", inputSchema: { type: "object", properties: { width: { type: "number" }, height: { type: "number" }, mobile: { type: "boolean" } }, required: ["width"] } },
+    def: { description: "設定瀏覽器 viewport 尺寸——僅限測試案例明確要求 RWD/響應式驗證時使用，不可用來「讓看不到的元素出現」（那要靠切換分頁＋重新 take_snapshot）。width 必填；height 預設 800；mobile=true 啟用行動裝置模式（觸控 + deviceScaleFactor=2）。RWD 驗證結束後必須用 reset=true 還原，否則後續畫面與錄影尺寸都會異常。", inputSchema: { type: "object", properties: { width: { type: "number" }, height: { type: "number" }, mobile: { type: "boolean" }, reset: { type: "boolean", description: "true=清除裝置模擬還原預設" } }, required: [] } },
     run: (a) => toolSetViewport(a),
   },
 };
