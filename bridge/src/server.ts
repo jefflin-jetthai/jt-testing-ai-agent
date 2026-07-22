@@ -320,6 +320,9 @@ const MIME: Record<string, string> = {
   ".md": "text/markdown; charset=utf-8",
   ".webm": "video/webm",
   ".mp4": "video/mp4",
+  // 證據檔與 curl 腳本：用純文字讓 RD 直接在瀏覽器點開看，不必先下載
+  ".json": "text/plain; charset=utf-8",
+  ".sh": "text/plain; charset=utf-8",
 };
 
 /** 把某個產出目錄渲染成可瀏覽的 HTML：gif/jpg/png 內嵌預覽，子目錄與其他檔案則列連結。 */

@@ -26,6 +26,11 @@
       <a id="update-download" href="#" target="_blank" rel="noopener" style="display: none">手動下載 zip</a>
       <button id="update-dismiss" title="關閉" style="background: transparent; padding: 2px 6px">✕</button>
     </div>
+    <!-- bridge 已更新但未重啟：跑的仍是舊程式碼，提示一鍵重啟 -->
+    <div id="stale-bar" class="update-bar" style="display: none">
+      <span id="stale-msg"></span>
+      <button id="btn-restart-bridge">重啟 bridge</button>
+    </div>
 
     <section class="panel">
       <div class="row">

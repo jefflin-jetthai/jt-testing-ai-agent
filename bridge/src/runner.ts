@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   agentCwd,
   artifactsDir,
+  bridgeStaleInfo,
   CDP_BROWSER_URL,
   CLAUDE_MODEL,
   CODEX_MODEL,
@@ -170,6 +171,18 @@ export async function startRun(
           `agent=${agentName} · model=${modelLabel}`,
       });
 
+      // bridge 已更新但沒重啟 → 跑的是舊程式碼，先警告（最容易漏看的坑）
+      const stale = bridgeStaleInfo();
+      if (stale.stale) {
+        log({
+          kind: "stderr",
+          text:
+            `⚠️ bridge 程式已更新但尚未重啟，本次執行仍使用舊版邏輯` +
+            `（執行中：${stale.loadedAt}／磁碟：${stale.diskAt}）。` +
+            `請按「停止 bridge」→「連線」後重跑。`,
+        });
+      }
+
       const runDir = join(artifactsDir(), runId);
       mkdirSync(runDir, { recursive: true });
 
@@ -230,6 +243,9 @@ export async function startRun(
           target: string; // METHOD URL，用來判斷後續是否有同一呼叫成功取代
           authIssue: boolean; // 401/403 等授權失效（環境問題，非產品缺陷）
           supersededBy?: number;
+          status: number;
+          curl?: string; // 給 RD 重現用（憑證以 $TOKEN 佔位）
+          curlHints?: string[];
         }[] = [];
         apiEvidence.handler = (ev) => {
           try {
@@ -248,6 +264,9 @@ export async function startRun(
               file,
               target: `${req.method ?? ""} ${String(req.url ?? "").split("?")[0]}`.trim(),
               authIssue: !!(ev as any)?.authIssue,
+              status,
+              curl: typeof req.curl === "string" ? req.curl : undefined,
+              curlHints: Array.isArray(req.curlHints) ? req.curlHints : undefined,
             });
             // API 錯誤（網路錯誤 / HTTP >=400 / assert FAIL）→ 即時紅色警示；正常 → 一般紀錄
             const reason = resp.error
@@ -337,6 +356,37 @@ export async function startRun(
           if (later) e.supersededBy = later.seq;
         }
 
+        // 產出可直接執行的 curl 腳本（給 RD 重現）。純文字檔，沒有 JSON 的跳脫問題，
+        // 複製貼上即可用；憑證以 $TOKEN 佔位。
+        let curlFileName: string | undefined;
+        const withCurl = apiEvidences.filter((e) => e.curl);
+        if (withCurl.length) {
+          try {
+            curlFileName = `${artifactBase}-api-curl.sh`;
+            const hints = [...new Set(withCurl.flatMap((e) => e.curlHints ?? []))];
+            const sh = [
+              "#!/usr/bin/env bash",
+              `# ${tc.tcId} ${tc.title}`,
+              `# 由 jt-testing-ai-agent 於 ${new Date().toLocaleString("zh-TW")} 產生`,
+              "#",
+              ...hints.map((h) => `# ${h}`),
+              "",
+              'if [ -z "$TOKEN" ]; then echo "請先設定：export TOKEN=\'<access token>\'" >&2; exit 1; fi',
+              "",
+              ...withCurl.flatMap((e) => [
+                `# ── #${e.seq} [${e.result}] HTTP ${e.status}｜${e.check.replace(/\s*\n\s*/g, " ")}`,
+                e.curl as string,
+                "",
+              ]),
+            ].join("\n");
+            writeFileSync(join(runDir, curlFileName), sh, { mode: 0o755 });
+            log({ tcId: tc.tcId, kind: "system", text: `已產出 curl 重現腳本：${curlFileName}` });
+          } catch (e) {
+            curlFileName = undefined;
+            log({ tcId: tc.tcId, kind: "stderr", text: `curl 腳本產生失敗：${formatError(e)}` });
+          }
+        }
+
         // 回寫產品知識庫（失敗不影響測試結果）
         try {
           const learned = parseMemory(finalText);
@@ -369,6 +419,7 @@ export async function startRun(
           actualEnv: verdict.env,
           actualVersion: verdict.version,
           apiEvidence: apiEvidences,
+          apiCurlFileName: curlFileName,
         });
 
         const result: RunResultPayload = {

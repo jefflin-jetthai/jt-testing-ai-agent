@@ -4,7 +4,7 @@
  * 憑證（NOTION_API_KEY / ANTHROPIC_API_KEY ...）不另存，
  * 一律從 AT repo 的 .env 載入（見 loadAtEnv）。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -141,6 +141,41 @@ export function loadAtEnv(): void {
 }
 
 /** 啟動時的健康檢查，回傳人類可讀的狀態。 */
+/**
+ * 執行中的 bridge 程式檔（打包版才有；開發模式用 tsx 跑原始碼，回空字串）。
+ * bridge 是常駐程序：更新 bundle 後若沒重啟，跑的仍是舊程式碼——用檔案時間戳偵測。
+ */
+const RUNNING_SCRIPT = (() => {
+  if (process.env.JT_BRIDGE_SCRIPT) return process.env.JT_BRIDGE_SCRIPT;
+  // SEA 單一執行檔：execPath 就是自己（node 版的 execPath 是 node 本身，不算）
+  return /(^|[/\\])node\d*$/.test(process.execPath) ? "" : process.execPath;
+})();
+
+const RUNNING_SCRIPT_MTIME = (() => {
+  try {
+    return RUNNING_SCRIPT ? statSync(RUNNING_SCRIPT).mtimeMs : 0;
+  } catch {
+    return 0;
+  }
+})();
+
+/** 磁碟上的程式檔是否比執行中的版本新（＝已更新但尚未重啟 bridge）。 */
+export function bridgeStaleInfo(): { stale: boolean; loadedAt?: string; diskAt?: string } {
+  if (!RUNNING_SCRIPT || !RUNNING_SCRIPT_MTIME) return { stale: false };
+  try {
+    const diskMtime = statSync(RUNNING_SCRIPT).mtimeMs;
+    // 給 2 秒容差，避免寫檔過程中的時間差誤判
+    if (diskMtime <= RUNNING_SCRIPT_MTIME + 2000) return { stale: false };
+    return {
+      stale: true,
+      loadedAt: new Date(RUNNING_SCRIPT_MTIME).toLocaleString("zh-TW"),
+      diskAt: new Date(diskMtime).toLocaleString("zh-TW"),
+    };
+  } catch {
+    return { stale: false };
+  }
+}
+
 export function describeConfig(): Record<string, unknown> {
   const p = atRepoPath();
   const envPath = p ? resolve(p, ".env") : "";
@@ -158,6 +193,10 @@ export function describeConfig(): Record<string, unknown> {
     codexModel: CODEX_MODEL,
     antigravityModel: ANTIGRAVITY_MODEL,
     artifactsDir: artifactsDir(),
+    ...(() => {
+      const s = bridgeStaleInfo();
+      return { bridgeStale: s.stale, bridgeLoadedAt: s.loadedAt, bridgeDiskAt: s.diskAt };
+    })(),
   };
 }
 

@@ -62,6 +62,8 @@ export interface BuildReportArgs {
     authIssue?: boolean;
     supersededBy?: number;
   }[];
+  /** 可直接執行的 curl 重現腳本檔名（給 RD） */
+  apiCurlFileName?: string;
 }
 
 /** 產生 markdown 字串（表格式報告：摘要表 + 步驟表 + 確認項目表 + 結論）。 */
@@ -141,6 +143,9 @@ export function buildMarkdown(a: BuildReportArgs): string {
       "",
       "## API 證據",
       `> API 呼叫軌跡（含過程試錯）。其中屬產品判定失敗：**${productFails}** 筆；產品結論以上方「確認項目結果」為準。`,
+      ...(a.apiCurlFileName
+        ? [`> RD 重現指令：\`${a.apiCurlFileName}\`（可直接執行的 curl，憑證以 $TOKEN 佔位）`]
+        : []),
       "",
       "| # | 檢查 | 結果 | 說明 | 檔案 |",
       "| --- | --- | --- | --- | --- |",

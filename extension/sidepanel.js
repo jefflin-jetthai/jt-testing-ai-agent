@@ -284,6 +284,7 @@ async function connect() {
       if (cfg.codexModel) agentModels.codex = cfg.codexModel;
       if (cfg.antigravityModel) agentModels.antigravity = cfg.antigravityModel;
       updateModelUI(); // 依目前 agent 填入下拉並選中偵測到的 model
+      showStaleBridge(cfg); // bridge 程式已更新但沒重啟 → 提示重啟（否則跑的是舊邏輯）
       refreshChromeStatus();
       checkUpdate(); // 線上偵測新版（GitHub Releases）
     } catch (e) {
@@ -664,7 +665,41 @@ function escapeHtml(s) {
   );
 }
 
+/**
+ * bridge 是常駐程序：bundle 更新後若沒重啟，跑的仍是舊程式碼（改動看似沒生效）。
+ * bridge 端比對檔案時間戳後回報，這裡顯示提示列並提供一鍵重啟。
+ */
+function showStaleBridge(cfg) {
+  const bar = $("stale-bar");
+  if (!cfg?.bridgeStale) {
+    bar.style.display = "none";
+    return;
+  }
+  $("stale-msg").textContent =
+    `⚠️ bridge 程式已更新但尚未重啟，目前仍執行舊版邏輯（載入 ${cfg.bridgeLoadedAt || "?"} 的版本，磁碟上是 ${cfg.bridgeDiskAt || "?"}）`;
+  bar.style.display = "";
+}
+
 $("btn-connect").addEventListener("click", connect);
+// 一鍵重啟：停掉舊 bridge，再連線（native host 會用磁碟上的新版拉起）
+$("btn-restart-bridge").addEventListener("click", async () => {
+  const btn = $("btn-restart-bridge");
+  btn.disabled = true;
+  btn.textContent = "重啟中…";
+  try {
+    await call("bridge.shutdown");
+  } catch {
+    /* 預期：bridge 結束後連線會斷，可能收不到回應 */
+  }
+  try { ws?.close(); } catch { /* noop */ }
+  setConnected(false);
+  logLine("已停止舊 bridge，重新連線中…", "tool");
+  setTimeout(() => {
+    connect();
+    btn.disabled = false;
+    btn.textContent = "重啟 bridge";
+  }, 1200);
+});
 $("btn-stop-bridge").addEventListener("click", async () => {
   try {
     await call("bridge.shutdown");

@@ -357,14 +357,45 @@ async function findFreshJwt(currentToken) {
 }
 
 /** headers 存證用遮罩：token/cookie 類只留前 12 字元。 */
+const SENSITIVE_HEADER = /authorization|token|cookie|secret|key/i;
 function maskHeaders(headers) {
   if (!headers || typeof headers !== "object") return undefined;
   return Object.fromEntries(
     Object.entries(headers).map(([k, v]) => [
       k,
-      /authorization|token|cookie|secret|key/i.test(k) ? String(v).slice(0, 12) + "…(遮罩)" : v,
+      SENSITIVE_HEADER.test(k) ? String(v).slice(0, 12) + "…(遮罩)" : v,
     ]),
   );
+}
+
+/** shell 單引號字串（內含單引號用 '\'' 收合）。 */
+function shQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * 產生可交給 RD 重現的 curl。憑證一律換成 $TOKEN 佔位符——證據檔會被貼進 Notion 分享，
+ * 且 JWT 數分鐘就過期，寫死真值既外洩又無法重用。
+ */
+function buildCurl({ method, url, headers, body, withCookie }) {
+  const parts = ["curl"];
+  if (method && method !== "GET") parts.push("-X", method);
+  parts.push(shQuote(url));
+  for (const [k, v] of Object.entries(headers || {})) {
+    const val = SENSITIVE_HEADER.test(k)
+      ? /^Bearer\s/i.test(String(v))
+        ? "Bearer $TOKEN"
+        : "$TOKEN"
+      : String(v);
+    parts.push("-H", shQuote(`${k}: ${val}`));
+  }
+  if (body != null) {
+    parts.push("--data", shQuote(typeof body === "string" ? body : JSON.stringify(body)));
+  }
+  const cmd = parts.join(" ");
+  const hints = ["先設定 TOKEN 環境變數：export TOKEN='<你的 access token>'"];
+  if (withCookie) hints.push("原呼叫帶瀏覽器登入 cookie，curl 需另外補 -b '<cookie>' 或改用 token 授權");
+  return { cmd, hints };
 }
 
 /** 把證據卡疊到受測頁右上角（錄影入鏡用），約 1.8 秒後自動移除。 */
@@ -484,7 +515,24 @@ async function toolApiCheck({ url, method, headers, body, check, assert, note })
     attempts: attempts.length ? attempts : undefined,
     authIssue: authIssue || undefined,
     authRetry: authRetry || undefined,
-    request: { method: m, url, pageUrl: r.pageUrl, headers: maskHeaders(headers), body: body ?? undefined },
+    request: {
+      method: m,
+      url,
+      pageUrl: r.pageUrl,
+      headers: maskHeaders(headers),
+      body: body ?? undefined,
+      // 給 RD 重現用（憑證以 $TOKEN 佔位）
+      ...(() => {
+        const c = buildCurl({
+          method: m,
+          url: r.finalUrl || url,
+          headers,
+          body,
+          withCookie: via === "page",
+        });
+        return { curl: c.cmd, curlHints: c.hints };
+      })(),
+    },
     response: { status: r.status, durationMs: r.durationMs, truncated: r.truncated, bodyText: r.bodyText, error: r.err || undefined },
     assert: assert ? { expression: assert, result: verdict, error: r.assertError || undefined, note: note || undefined } : undefined,
   });
