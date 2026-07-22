@@ -227,6 +227,9 @@ export async function startRun(
           result: string;
           note: string;
           file: string;
+          target: string; // METHOD URL，用來判斷後續是否有同一呼叫成功取代
+          authIssue: boolean; // 401/403 等授權失效（環境問題，非產品缺陷）
+          supersededBy?: number;
         }[] = [];
         apiEvidence.handler = (ev) => {
           try {
@@ -234,17 +237,19 @@ export async function startRun(
             const file = `${artifactBase}-api-${String(seq).padStart(2, "0")}.json`;
             writeFileSync(join(runDir, file), JSON.stringify({ tcId: tc.tcId, ...ev }, null, 2));
             const assert = (ev as any)?.assert;
+            const req = (ev as any)?.request ?? {};
+            const resp = (ev as any)?.response ?? {};
+            const status = Number(resp.status ?? 0);
             apiEvidences.push({
               seq,
               check: String((ev as any)?.check ?? ""),
               result: String(assert?.result ?? "INFO"),
               note: String(assert?.note ?? ""),
               file,
+              target: `${req.method ?? ""} ${String(req.url ?? "").split("?")[0]}`.trim(),
+              authIssue: !!(ev as any)?.authIssue,
             });
             // API 錯誤（網路錯誤 / HTTP >=400 / assert FAIL）→ 即時紅色警示；正常 → 一般紀錄
-            const req = (ev as any)?.request ?? {};
-            const resp = (ev as any)?.response ?? {};
-            const status = Number(resp.status ?? 0);
             const reason = resp.error
               ? `網路錯誤：${resp.error}`
               : status >= 400
@@ -318,6 +323,19 @@ export async function startRun(
         if (recPath) log({ tcId: tc.tcId, kind: "system", text: `已產出錄影：${recPath}` });
 
         const verdict = parseVerdict(finalText);
+
+        // 標記「後續同一呼叫已成功」的失敗證據：這類多半是 token 失效／端點試錯的
+        // 過程紀錄，不是產品缺陷；報告據此改標示，避免被誤讀成 bug。
+        for (const e of apiEvidences) {
+          if (e.result === "PASS") continue;
+          const later = apiEvidences.find(
+            (o) =>
+              o.seq > e.seq &&
+              o.result === "PASS" &&
+              ((!!e.target && o.target === e.target) || (!!e.check && o.check === e.check)),
+          );
+          if (later) e.supersededBy = later.seq;
+        }
 
         // 回寫產品知識庫（失敗不影響測試結果）
         try {

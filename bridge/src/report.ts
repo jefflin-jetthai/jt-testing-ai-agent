@@ -53,7 +53,15 @@ export interface BuildReportArgs {
   actualEnv?: string; // agent 這次執行實際觀察到的環境（優先於 Notion 記載）
   actualVersion?: string; // agent 實際觀察到的產品版本（優先於 Notion 記載）
   /** api_check 工具留下的證據摘要（完整 request/response 在對應 json 檔） */
-  apiEvidence?: { seq: number; check: string; result: string; note: string; file: string }[];
+  apiEvidence?: {
+    seq: number;
+    check: string;
+    result: string;
+    note: string;
+    file: string;
+    authIssue?: boolean;
+    supersededBy?: number;
+  }[];
 }
 
 /** 產生 markdown 字串（表格式報告：摘要表 + 步驟表 + 確認項目表 + 結論）。 */
@@ -112,11 +120,36 @@ export function buildMarkdown(a: BuildReportArgs): string {
   }
 
   // ── API 證據表（api_check 工具產出）──
+  // 這裡是「呼叫軌跡」，不是產品判定：token 失效、端點試錯等過程中的失敗會另外標示，
+  // 避免被誤讀成產品缺陷（產品判定一律以上方「確認項目結果」為準）。
   if (a.apiEvidence?.length) {
-    lines.push("", "## API 證據", "| # | 檢查 | 結果 | 說明 | 檔案 |", "| --- | --- | --- | --- | --- |");
+    const classify = (e: NonNullable<BuildReportArgs["apiEvidence"]>[number]) => {
+      if (e.result === "PASS") return { badge: STATUS_EMOJI.pass, extra: "" };
+      if (e.supersededBy != null)
+        return { badge: "🔁 已重試成功", extra: `（後由 #${e.supersededBy} 成功取代，非產品缺陷）` };
+      if (e.authIssue)
+        return { badge: "⚠️ 授權失效", extra: "（token 過期等環境問題，非產品缺陷）" };
+      // 測項整體通過 → 該次失敗必然是過程中的試錯，否則 agent 不會判 PASS
+      if (e.result === "FAIL" && status === "pass")
+        return { badge: "🔁 過程試錯", extra: "（測項最終通過，非產品缺陷）" };
+      return { badge: STATUS_EMOJI[e.result.toLowerCase()] ?? e.result, extra: "" };
+    };
+    const productFails = a.apiEvidence.filter(
+      (e) => classify(e).badge === STATUS_EMOJI.fail,
+    ).length;
+    lines.push(
+      "",
+      "## API 證據",
+      `> API 呼叫軌跡（含過程試錯）。其中屬產品判定失敗：**${productFails}** 筆；產品結論以上方「確認項目結果」為準。`,
+      "",
+      "| # | 檢查 | 結果 | 說明 | 檔案 |",
+      "| --- | --- | --- | --- | --- |",
+    );
     for (const e of a.apiEvidence) {
-      const badge = STATUS_EMOJI[e.result.toLowerCase()] ?? e.result;
-      lines.push(`| ${e.seq} | ${cell(e.check)} | ${cell(badge)} | ${cell(e.note)} | ${cell(e.file)} |`);
+      const { badge, extra } = classify(e);
+      lines.push(
+        `| ${e.seq} | ${cell(e.check)} | ${cell(badge)} | ${cell(e.note + extra)} | ${cell(e.file)} |`,
+      );
     }
   }
 

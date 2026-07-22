@@ -133,12 +133,51 @@ async function toolNavigate(url) {
 }
 
 /**
+ * 錄影用的「假滑鼠指標」：CDP 截圖只渲染頁面內容、拍不到 OS 游標，且 agent 用的是
+ * 合成事件（沒有真實指標移動），故在頁面內畫一個箭頭指標，操作前移到目標中心並
+ * 加點擊漣漪，錄影才看得出「點在哪裡」。位置存 sessionStorage，導頁後由 recorder 復原。
+ */
+const CURSOR_JS = `
+  const jtCursor = () => {
+    let c = document.getElementById('__jt_cursor');
+    if (!c) {
+      c = document.createElement('div');
+      c.id = '__jt_cursor';
+      c.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;width:22px;height:22px;' +
+        'left:-99px;top:-99px;transition:left .18s ease-out,top .18s ease-out;' +
+        'filter:drop-shadow(0 1px 2px rgba(0,0,0,.45));';
+      c.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24">' +
+        '<path d="M4 3 L4 19.5 L8.2 15.3 L10.8 21.2 L13.4 20.1 L10.9 14.4 L16.5 14.4 Z" ' +
+        'fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+      document.documentElement.appendChild(c);
+    }
+    return c;
+  };
+  const jtMoveCursor = (x, y) => {
+    const c = jtCursor();
+    c.style.left = (x - 4) + 'px';  // 讓箭頭「尖端」落在座標上
+    c.style.top = (y - 3) + 'px';
+    try { sessionStorage.setItem('__jt_cursor_pos', x + ',' + y); } catch (e) {}
+  };
+  const jtRipple = (x, y) => {
+    const r = document.createElement('div');
+    r.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;left:' + (x - 14) + 'px;top:' +
+      (y - 14) + 'px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(56,189,248,.95);' +
+      'background:rgba(56,189,248,.22);transform:scale(.35);opacity:1;' +
+      'transition:transform .5s ease-out,opacity .5s ease-out;';
+    document.documentElement.appendChild(r);
+    requestAnimationFrame(() => { r.style.transform = 'scale(1.5)'; r.style.opacity = '0'; });
+    setTimeout(() => r.remove(), 700);
+  };
+`;
+
+/**
  * 完整滑鼠事件序列（帶元素中心座標的 pointerdown→mousedown→focus→pointerup→mouseup→click）。
  * 只用 el.click() 會缺真實座標與 down/up 事件，Element UI 這類 popper 浮層
  * 的定位（mousedown 觸發）與關閉（click-outside）都不會發生，
  * 造成下拉選單卡在畫面左上角 (0,0) 並殘留——錄影裡看起來像 bug。
  */
-const REAL_CLICK_JS = `
+const REAL_CLICK_JS = CURSOR_JS + `
   const fire = (el, type, Ctor, x, y, extra) => el.dispatchEvent(new Ctor(type, Object.assign({
     bubbles: true, cancelable: true, composed: true, view: window,
     clientX: x, clientY: y, button: 0,
@@ -148,6 +187,8 @@ const REAL_CLICK_JS = `
     el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    jtMoveCursor(x, y);  // 錄影可見：指標移到目標並留在此處
+    jtRipple(x, y);
     const PE = window.PointerEvent || MouseEvent;
     const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true };
     fire(el, 'pointerdown', PE, x, y, pointer);
@@ -178,7 +219,10 @@ async function toolClick({ ref, text }) {
 }
 
 async function toolFill({ ref, value }) {
-  const js = `(() => { const el=document.querySelector('[data-jt-ref=' + JSON.stringify(String(${JSON.stringify(String(ref))})) + ']'); if(!el) return {ok:false,err:'找不到 ref ${ref}'};
+  const js = `(() => { ${CURSOR_JS} const el=document.querySelector('[data-jt-ref=' + JSON.stringify(String(${JSON.stringify(String(ref))})) + ']'); if(!el) return {ok:false,err:'找不到 ref ${ref}'};
+    el.scrollIntoView({block:'center'});
+    const fr = el.getBoundingClientRect();
+    jtMoveCursor(fr.left + Math.min(fr.width / 2, 60), fr.top + fr.height / 2); // 錄影可見：指標移到填值欄位
     el.focus(); el.value=${JSON.stringify(value ?? "")};
     el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));
     return {ok:true}; })()`;
@@ -281,6 +325,37 @@ async function apiFetchInNode({ url, method, headers, body, assert, baseUrl }) {
   };
 }
 
+/**
+ * 從頁面 storage 撈出「最新且未過期」的 JWT。
+ * 頁面閒置期間 token 常已失效、但頁面自己會刷新；agent 手上的舊 token 就會撞 401。
+ * 找到比手上更新的就自動換用，避免產生假的 FAIL 證據。
+ */
+async function findFreshJwt(currentToken) {
+  const js = `(() => {
+    const seen = new Set(); const out = [];
+    const jwtExp = (t) => { try {
+      const p = JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      return typeof p.exp === 'number' ? p.exp * 1000 : 0;
+    } catch (e) { return 0; } };
+    for (const st of [localStorage, sessionStorage]) {
+      let n = 0; try { n = st.length; } catch (e) { continue; }
+      for (let i = 0; i < n; i++) {
+        const v = (() => { try { return st.getItem(st.key(i)) || ''; } catch (e) { return ''; } })();
+        const m = v.match(/eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]*/g) || [];
+        for (const t of m) if (!seen.has(t)) { seen.add(t); out.push({ t: t, exp: jwtExp(t) }); }
+      }
+    }
+    return out.filter(o => o.exp === 0 || o.exp > Date.now() + 5000).sort((a, b) => b.exp - a.exp).map(o => o.t);
+  })()`;
+  try {
+    const list = await evalJs(js);
+    if (!Array.isArray(list)) return null;
+    return list.find((t) => t && t !== currentToken) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** headers 存證用遮罩：token/cookie 類只留前 12 字元。 */
 function maskHeaders(headers) {
   if (!headers || typeof headers !== "object") return undefined;
@@ -361,14 +436,44 @@ async function toolApiCheck({ url, method, headers, body, check, assert, note })
   }
   r = { ...r, pageUrl };
 
+  // token 失效自動換新重打：頁面閒置時 accessToken 常已過期、但頁面自己刷新過，
+  // agent 手上的舊 token 會撞 401 並留下「看起來像產品 bug」的 FAIL 證據。
+  let authRetry = null;
+  if (!r.err && (r.status === 401 || r.status === 403) && hasAuth) {
+    const authKey = Object.keys(headers).find((k) => /^authorization$/i.test(k));
+    const raw = String(headers[authKey]);
+    const fresh = await findFreshJwt(raw.replace(/^Bearer\s+/i, ""));
+    if (fresh) {
+      headers = { ...headers, [authKey]: /^Bearer\s/i.test(raw) ? `Bearer ${fresh}` : fresh };
+      const retry =
+        via === "node"
+          ? await apiFetchInNode({ url, method: m, headers, body, assert, baseUrl: pageUrl })
+          : await apiFetchInPage({
+              url, method: m, headers, body, assert,
+              credentials: via === "page" ? "include" : "omit",
+            });
+      authRetry = { fromStatus: r.status, toStatus: retry.status, usedFreshToken: true };
+      r = { ...retry, pageUrl: retry.pageUrl || pageUrl };
+    } else {
+      authRetry = { fromStatus: r.status, toStatus: null, usedFreshToken: false };
+    }
+  }
+  const authIssue =
+    r.status === 401 || r.status === 403 || /token[\s_-]*expire|unauthor/i.test(r.bodyText || "");
+
   const verdict = r.err ? "FAIL" : r.pass === null ? "INFO" : r.pass ? "PASS" : "FAIL";
   const file = `api-${String(seq).padStart(2, "0")}.json`;
   const viaLabel = via === "page" ? "" : via === "page-omit" ? "（頁面 fetch 不帶 cookie）" : "（CORS 受阻，改由本機直呼、僅帶明示 headers）";
+  const authLabel = authRetry
+    ? authRetry.usedFreshToken
+      ? `（原 ${authRetry.fromStatus} token 失效，已自動換頁面最新 token 重打）`
+      : `（token 失效且頁面無更新的 token，請先呼叫該產品的 refresh 端點換 token 再重驗）`
+    : "";
   const noteText = r.err
     ? `網路錯誤：${r.err}`
     : r.assertError
       ? `assert 執行失敗：${r.assertError}`
-      : `${note || check || ""}${viaLabel}`;
+      : `${note || check || ""}${authLabel}${viaLabel}`;
 
   // 1) 完整證據 → bridge 寫檔（api-NN.json）
   sendApiEvidence({
@@ -377,6 +482,8 @@ async function toolApiCheck({ url, method, headers, body, check, assert, note })
     check: check || "",
     via,
     attempts: attempts.length ? attempts : undefined,
+    authIssue: authIssue || undefined,
+    authRetry: authRetry || undefined,
     request: { method: m, url, pageUrl: r.pageUrl, headers: maskHeaders(headers), body: body ?? undefined },
     response: { status: r.status, durationMs: r.durationMs, truncated: r.truncated, bodyText: r.bodyText, error: r.err || undefined },
     assert: assert ? { expression: assert, result: verdict, error: r.assertError || undefined, note: note || undefined } : undefined,

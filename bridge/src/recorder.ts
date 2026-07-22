@@ -47,11 +47,14 @@ interface FrameMeta {
 }
 
 /**
- * 步驟橫幅注入 JS（idempotent）：受測頁頂部一條窄橫幅，顯示目前 TC／步驟標題。
- * 導頁後 DOM 會清空，故由 recorder 在每次擷取前（attach）或定期（remote）重新確保。
- * pointer-events:none 不干擾操作；z-index 低於 API 證據卡一階。
+ * 錄影疊加層注入 JS（idempotent）：
+ * 1. 步驟橫幅——受測頁頂部一條窄橫幅，顯示目前 TC／步驟標題；
+ * 2. 假滑鼠指標——導頁會清空 DOM，依 sessionStorage 記下的最後座標復原
+ *    （指標由 browser-mcp 的點擊/填值操作放置，見 CURSOR_JS）。
+ * 導頁後由 recorder 在每次擷取前（attach）或定期（remote）重新確保。
+ * 皆 pointer-events:none 不干擾操作。
  */
-function bannerJs(text: string): string {
+function overlaysJs(text: string): string {
   return `(() => {
     const t = ${JSON.stringify(text)};
     let el = document.getElementById("__jt_step_banner");
@@ -64,6 +67,24 @@ function bannerJs(text: string): string {
       document.documentElement.appendChild(el);
     }
     if (el.textContent !== t) el.textContent = t;
+
+    // 導頁後復原指標（同源 sessionStorage 會保留最後座標）
+    if (!document.getElementById("__jt_cursor")) {
+      let pos = null;
+      try { pos = sessionStorage.getItem("__jt_cursor_pos"); } catch (e) {}
+      if (pos) {
+        const xy = pos.split(",");
+        const c = document.createElement("div");
+        c.id = "__jt_cursor";
+        c.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;width:22px;height:22px;" +
+          "left:" + (Number(xy[0]) - 4) + "px;top:" + (Number(xy[1]) - 3) + "px;" +
+          "transition:left .18s ease-out,top .18s ease-out;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45));";
+        c.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24">' +
+          '<path d="M4 3 L4 19.5 L8.2 15.3 L10.8 21.2 L13.4 20.1 L10.9 14.4 L16.5 14.4 Z" ' +
+          'fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+        document.documentElement.appendChild(c);
+      }
+    }
     return true;
   })()`;
 }
@@ -253,7 +274,7 @@ export class ScreencastRecorder {
       // 定期重新確保步驟橫幅存在（導頁後 DOM 會清空；fire-and-forget，不阻擋 frame 處理）
       if (this.tcLabel && now - this.lastBannerAt > 1500) {
         this.lastBannerAt = now;
-        this.send("Runtime.evaluate", { expression: bannerJs(this.tcLabel), returnByValue: true });
+        this.send("Runtime.evaluate", { expression: overlaysJs(this.tcLabel), returnByValue: true });
       }
       if (
         this.frames.length < CAPTURE_MAX_FRAMES &&
@@ -363,22 +384,21 @@ export class StepRecorder {
     return this.chain;
   }
 
-  /** 擷取前確保步驟橫幅存在（導頁會清掉 DOM）。失敗不影響截圖本身。 */
-  private async ensureBanner(): Promise<void> {
-    if (!this.bannerText) return;
+  /** 擷取前確保疊加層（步驟橫幅、滑鼠指標）存在（導頁會清掉 DOM）。失敗不影響截圖本身。 */
+  private async ensureOverlays(): Promise<void> {
     try {
       await tabRelay.sendCommand("Runtime.evaluate", {
-        expression: bannerJs(this.bannerText),
+        expression: overlaysJs(this.bannerText),
         returnByValue: true,
       });
     } catch {
-      /* 橫幅失敗不阻擋擷取 */
+      /* 疊加層失敗不阻擋擷取 */
     }
   }
 
   private async shoot(dedupe: boolean): Promise<void> {
     if (this.frames.length >= STEP_MAX_FRAMES) return;
-    await this.ensureBanner();
+    await this.ensureOverlays();
     const r = (await tabRelay.sendCommand("Page.captureScreenshot", {
       format: "jpeg",
       quality: CAPTURE_JPEG_QUALITY,

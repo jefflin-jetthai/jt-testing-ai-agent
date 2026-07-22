@@ -369,24 +369,33 @@ $("rec-video").addEventListener("change", () => {
 
 // 執行時 agent CLI 回報的「實際解析到的 model」（run.model 事件；持久化供下次開啟顯示）
 const resolvedModels = {};
-chrome.storage.sync.get(["resolvedModels"], ({ resolvedModels: saved }) => {
-  if (saved && typeof saved === "object") {
-    Object.assign(resolvedModels, saved);
-    updateModelUI();
-  }
+// 使用者自己選的 model（每個 agent 各記一個）。不記住的話，run.model 事件或重連時
+// 下拉會被重建並跳回 bridge 預設（opus），使用者選的 sonnet 就無聲消失了。
+const selectedModels = {};
+chrome.storage.sync.get(["resolvedModels", "selectedModels"], (s) => {
+  if (s.resolvedModels && typeof s.resolvedModels === "object")
+    Object.assign(resolvedModels, s.resolvedModels);
+  if (s.selectedModels && typeof s.selectedModels === "object")
+    Object.assign(selectedModels, s.selectedModels);
+  updateModelUI();
 });
 
-/** 依 agent 填入 model 下拉選項；把偵測到的目前 model 也納入並選中。 */
+/** 依 agent 填入 model 下拉選項並還原選取（使用者選過的 > 目前值 > bridge 預設）。 */
 function setModelOptions(agent) {
   const sel = $("model-select");
   const opts = (MODEL_OPTIONS[agent] || []).slice();
   const current = agentModels[agent];
   if (current && !current.startsWith("(") && !opts.some((o) => o[0] === current))
     opts.unshift([current, current]); // bridge 偵測到的 model 不在清單 → 補進去
+  // 重建 options 會清掉選取，故先記下目前選擇再還原，否則每次重繪都跳回預設
+  const prev = agent in selectedModels ? selectedModels[agent] : sel.value;
   sel.innerHTML = opts
     .map(([v, l]) => `<option value="${escapeHtml(v)}">${escapeHtml(l)}</option>`)
     .join("");
-  if (current && !current.startsWith("(")) sel.value = current;
+  const pick = [prev, current].find(
+    (v) => v != null && !String(v).startsWith("(") && opts.some((o) => o[0] === v),
+  );
+  if (pick != null) sel.value = pick;
 }
 
 /** 有下拉選項的 agent（claude/codex）→ 顯示下拉；其它（antigravity）→ 顯示 model 文字。 */
@@ -788,6 +797,11 @@ async function refreshChromeStatus() {
 $("mode-select").addEventListener("change", applyModeUI);
 // 切換 agent → 更新右側 model 顯示（claude 顯示下拉，其它顯示文字）
 $("agent-select").addEventListener("change", updateModelUI);
+// 記住使用者選的 model（每個 agent 各記一個），下次重繪 / 重連 / 重開都沿用
+$("model-select").addEventListener("change", () => {
+  selectedModels[$("agent-select")?.value || "claude"] = $("model-select").value;
+  chrome.storage.sync.set({ selectedModels });
+});
 
 // 從目前 bridge ws url 推導 /cdp-relay 位址
 function relayUrl() {
